@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>에디터와 워커 메시지 흐름</title>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Noto+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #f9fafb;
+      --color-ink:    #191f28;
+      --color-muted:  #4e5968;
+      --color-accent: #3182f6;
+      --font-sans:    'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+      --font-mono:    'Geist Mono', 'SF Mono', Menlo, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-sans);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Sequence / card-auto-crop</p>
+    <h1>에디터와 워커 메시지 흐름</h1>
+
+    <svg viewBox="0 0 1000 860" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="editor-sequence-title editor-sequence-desc">
+      <title id="editor-sequence-title">에디터와 워커 메시지 흐름</title>
+      <desc id="editor-sequence-desc">사진을 올리면 Editor가 축소 이미지를 큐를 거쳐 웹 워커로 보내 SlimSAM으로 카드를 자동 탐지하고, 사용자가 점을 찍을 때마다 후보 마스크를 다시 받아 오며, 저장은 메인 스레드에서 원본 해상도로 처리하는 순서도.</desc>
+      <defs>
+        <marker id="es-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5968"/></marker>
+        <marker id="es-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3182f6"/></marker>
+        <marker id="es-arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="#4e5968" stroke-width="1.2"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#f9fafb"/>
+
+      <!-- Loop fragment frame (painted first) -->
+      <rect x="72" y="512" width="856" height="188" rx="4" fill="rgba(25,31,40,0.02)" stroke="rgba(25,31,40,0.22)" stroke-width="1"/>
+      <rect x="72" y="512" width="48" height="16" rx="2" fill="#f9fafb" stroke="rgba(25,31,40,0.22)" stroke-width="1"/>
+      <text x="96" y="524" fill="#4e5968" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.12em">LOOP</text>
+      <text x="132" y="525" fill="#4e5968" font-size="12" font-weight="500" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif">[점을 찍을 때마다]</text>
+
+      <!-- Lifelines -->
+      <g stroke="rgba(25,31,40,0.20)" stroke-width="1" stroke-dasharray="3,3">
+        <line x1="100" y1="96" x2="100" y2="752"/>
+        <line x1="300" y1="96" x2="300" y2="752"/>
+        <line x1="500" y1="96" x2="500" y2="752"/>
+        <line x1="700" y1="96" x2="700" y2="752"/>
+        <line x1="900" y1="96" x2="900" y2="752"/>
+      </g>
+
+      <!-- Activation bars -->
+      <g fill="rgba(25,31,40,0.06)" stroke="#4e5968" stroke-width="0.8">
+        <rect x="696" y="136" width="8" height="76"/>
+        <rect x="296" y="260" width="8" height="56"/>
+        <rect x="696" y="356" width="8" height="104"/>
+        <rect x="896" y="404" width="8" height="12"/>
+        <rect x="296" y="572" width="8" height="104"/>
+        <rect x="696" y="604" width="8" height="72"/>
+        <rect x="896" y="636" width="8" height="12"/>
+        <rect x="296" y="732" width="8" height="20"/>
+      </g>
+
+      <!-- Messages -->
+      <g fill="none" stroke-width="1.2">
+        <path d="M500 140 H696" stroke="#4e5968" stroke-dasharray="5,4" marker-end="url(#es-arrow-open)"/>
+        <path d="M696 208 H500" stroke="#4e5968" stroke-dasharray="5,4" marker-end="url(#es-arrow-open)"/>
+        <path d="M100 264 H296" stroke="#4e5968" marker-end="url(#es-arrow)"/>
+        <path d="M304 312 H500" stroke="#4e5968" marker-end="url(#es-arrow)"/>
+        <path d="M500 360 H696" stroke="#3182f6" marker-end="url(#es-arrow-accent)"/>
+        <path d="M704 408 H896" stroke="#4e5968" marker-end="url(#es-arrow)"/>
+        <path d="M696 456 H300" stroke="#3182f6" stroke-dasharray="5,4" marker-end="url(#es-arrow-accent)"/>
+        <path d="M100 576 H296" stroke="#4e5968" marker-end="url(#es-arrow)"/>
+        <path d="M304 608 H696" stroke="#4e5968" marker-end="url(#es-arrow)"/>
+        <path d="M704 640 H896" stroke="#4e5968" marker-end="url(#es-arrow)"/>
+        <path d="M696 672 H304" stroke="#4e5968" stroke-dasharray="5,4" marker-end="url(#es-arrow)"/>
+        <path d="M100 736 H296" stroke="#4e5968" marker-end="url(#es-arrow)"/>
+      </g>
+
+      <!-- Message labels: mono for message types, Pretendard 12px for Korean -->
+      <g font-family="'Geist Mono', 'SF Mono', Menlo, monospace" font-size="9" text-anchor="middle">
+        <rect x="572" y="122" width="56" height="12" rx="2" fill="#f9fafb"/>
+        <text x="600" y="131" fill="#4e5968">'warmup'</text>
+        <rect x="544" y="190" width="112" height="12" rx="2" fill="#f9fafb"/>
+        <text x="600" y="199" fill="#4e5968">'status', 'ready'</text>
+        <rect x="544" y="342" width="112" height="12" rx="2" fill="#f9fafb"/>
+        <text x="600" y="351" fill="#3182f6" font-weight="500">'image' detect:true</text>
+        <rect x="540" y="438" width="120" height="12" rx="2" fill="#f9fafb"/>
+        <text x="600" y="447" fill="#3182f6" font-weight="500">'result' quad, mask</text>
+        <rect x="372" y="590" width="56" height="12" rx="2" fill="#f4f5f6"/>
+        <text x="400" y="599" fill="#4e5968">'points'</text>
+        <rect x="772" y="622" width="56" height="12" rx="2" fill="#f4f5f6"/>
+        <text x="800" y="631" fill="#4e5968">predict</text>
+        <rect x="560" y="654" width="80" height="12" rx="2" fill="#f4f5f6"/>
+        <text x="600" y="663" fill="#4e5968">'candidates'</text>
+      </g>
+      <g font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" font-size="12" font-weight="500" text-anchor="middle" fill="#4e5968">
+        <rect x="132" y="242" width="136" height="16" rx="2" fill="#f9fafb"/>
+        <text x="200" y="254">사진 드롭 / 붙여넣기</text>
+        <rect x="324" y="290" width="152" height="16" rx="2" fill="#f9fafb"/>
+        <text x="400" y="302">1024px 축소 후 enqueue</text>
+        <rect x="732" y="386" width="136" height="16" rx="2" fill="#f9fafb"/>
+        <text x="800" y="398">임베딩 + detectCard</text>
+        <rect x="148" y="554" width="104" height="16" rx="2" fill="#f4f5f6"/>
+        <text x="200" y="566">클릭 / Alt+클릭</text>
+        <rect x="180" y="714" width="40" height="16" rx="2" fill="#f9fafb"/>
+        <text x="200" y="726">저장</text>
+      </g>
+
+      <!-- Notes -->
+      <g font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" font-size="12" fill="#8b95a1">
+        <text x="716" y="176">SlimSAM 로드 (webgpu / wasm)</text>
+        <text x="292" y="488" text-anchor="end">배지: 완료 / 직접 지정 필요</text>
+        <text x="716" y="692">작게 / 중간 / 크게 후보</text>
+        <text x="312" y="784">메인 스레드에서 원본 해상도로 warp / cutout 적용 후 PNG, ZIP 저장</text>
+      </g>
+
+      <!-- Actors (painted last) -->
+      <g font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif">
+        <rect x="28" y="40" width="144" height="56" rx="6" fill="#f9fafb"/>
+        <rect x="28" y="40" width="144" height="56" rx="6" fill="rgba(78,89,104,0.10)" stroke="#8b95a1" stroke-width="1"/>
+        <text x="100" y="66" fill="#191f28" font-size="13" font-weight="600" text-anchor="middle">사용자</text>
+        <text x="100" y="82" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">browser</text>
+
+        <rect x="228" y="40" width="144" height="56" rx="6" fill="#ffffff" stroke="#191f28" stroke-width="1"/>
+        <text x="300" y="66" fill="#191f28" font-size="13" font-weight="600" text-anchor="middle">Editor</text>
+        <text x="300" y="82" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">React, main thread</text>
+
+        <rect x="428" y="40" width="144" height="56" rx="6" fill="#ffffff" stroke="#191f28" stroke-width="1"/>
+        <text x="500" y="66" fill="#191f28" font-size="13" font-weight="600" text-anchor="middle">SegmenterClient</text>
+        <text x="500" y="82" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">promise queue</text>
+
+        <rect x="628" y="40" width="144" height="56" rx="6" fill="#e8f3ff" stroke="#3182f6" stroke-width="1"/>
+        <text x="700" y="66" fill="#191f28" font-size="13" font-weight="600" text-anchor="middle">Worker</text>
+        <text x="700" y="82" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">worker.ts</text>
+
+        <rect x="828" y="40" width="144" height="56" rx="6" fill="#f9fafb"/>
+        <rect x="828" y="40" width="144" height="56" rx="6" fill="rgba(25,31,40,0.05)" stroke="#4e5968" stroke-width="1"/>
+        <text x="900" y="66" fill="#191f28" font-size="13" font-weight="600" text-anchor="middle">SlimSAM</text>
+        <text x="900" y="82" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">slimsam-77-uniform</text>
+      </g>
+
+      <!-- Legend -->
+      <line x1="30" y1="808" x2="970" y2="808" stroke="rgba(25,31,40,0.10)" stroke-width="0.8"/>
+      <text x="30" y="836" fill="#4e5968" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" letter-spacing="0.14em">LEGEND</text>
+      <g font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" font-size="12" fill="#4e5968">
+        <path d="M112 832 H148" stroke="#4e5968" stroke-width="1.2" fill="none" marker-end="url(#es-arrow)"/>
+        <text x="156" y="836">호출</text>
+        <path d="M272 832 H308" stroke="#4e5968" stroke-width="1.2" stroke-dasharray="5,4" fill="none" marker-end="url(#es-arrow)"/>
+        <text x="316" y="836">응답</text>
+        <path d="M432 832 H468" stroke="#4e5968" stroke-width="1.2" stroke-dasharray="5,4" fill="none" marker-end="url(#es-arrow-open)"/>
+        <text x="476" y="836">비동기 알림</text>
+        <path d="M592 832 H628" stroke="#3182f6" stroke-width="1.2" fill="none" marker-end="url(#es-arrow-accent)"/>
+        <text x="636" y="836">자동 탐지 경로</text>
+      </g>
+    </svg>
+  </div>
+</body>
+</html>

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>카드 탐지 파이프라인</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f9fafb;
+      --color-ink:     #191f28;
+      --color-muted:   #4e5968;
+      --color-accent:  #3182f6;
+      --font-sans:     'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', sans-serif;
+      --font-mono:     'Geist Mono', 'SF Mono', Menlo, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-sans);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart / card-auto-crop</p>
+    <h1>카드 탐지 파이프라인</h1>
+
+    <svg viewBox="0 48 1000 472" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="detect-pipeline-title detect-pipeline-desc">
+      <title id="detect-pipeline-title">카드 탐지 파이프라인 (detectCard)</title>
+      <desc id="detect-pipeline-desc">사진을 한 번 임베딩한 뒤 4x4 격자 점마다 SAM 마스크 후보를 만들고, 마스크를 정리해 사각형으로 피팅하고 점수를 매겨 1위를 고른 다음, 조건을 만족하는 더 작은 안쪽 후보가 있으면 계속 교체해 최종 사각형으로 펴거나 오려내는 흐름.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4e5968"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3182f6"/></marker>
+      </defs>
+
+      <rect x="0" y="48" width="1000" height="472" fill="#f9fafb"/>
+
+      <!-- ===== Arrows (drawn first) ===== -->
+      <g fill="none" stroke="#4e5968" stroke-width="1">
+        <line x1="248" y1="124" x2="296" y2="124" marker-end="url(#arrow)"/>
+        <line x1="476" y1="124" x2="524" y2="124" marker-end="url(#arrow)"/>
+        <line x1="704" y1="124" x2="752" y2="124" marker-end="url(#arrow)"/>
+        <line x1="842" y1="168" x2="842" y2="236" marker-end="url(#arrow)"/>
+        <line x1="752" y1="280" x2="704" y2="280" marker-end="url(#arrow)"/>
+        <!-- 있음 -->
+        <line x1="524" y1="280" x2="476" y2="280" stroke="#3182f6" marker-end="url(#arrow-accent)"/>
+        <!-- 반복: 교체 후 다시 판정 -->
+        <path d="M386 236 V204 A8 8 0 0 1 394 196 H606 A8 8 0 0 1 614 204 V220" stroke="#3182f6" stroke-dasharray="5,4" marker-end="url(#arrow-accent)"/>
+        <!-- 없음 -->
+        <line x1="614" y1="340" x2="614" y2="388" marker-end="url(#arrow)"/>
+      </g>
+
+      <!-- Arrow labels (Korean register: 12px sans 500) -->
+      <g font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" font-size="12" font-weight="500" text-anchor="middle">
+        <rect x="484" y="256" width="32" height="16" rx="2" fill="#f9fafb"/>
+        <text x="500" y="268" fill="#3182f6">있음</text>
+        <rect x="484" y="172" width="32" height="16" rx="2" fill="#f9fafb"/>
+        <text x="500" y="184" fill="#3182f6">반복</text>
+        <rect x="624" y="356" width="32" height="16" rx="2" fill="#f9fafb"/>
+        <text x="640" y="368" fill="#4e5968">없음</text>
+      </g>
+
+      <!-- ===== Nodes ===== -->
+      <!-- 1. 시작: 카드 사진 (oval) -->
+      <rect x="68" y="100" width="180" height="48" rx="24" fill="#f9fafb"/>
+      <rect x="68" y="100" width="180" height="48" rx="24" fill="rgba(78,89,104,0.10)" stroke="#8b95a1" stroke-width="1"/>
+      <text x="158" y="122" fill="#191f28" font-size="12" font-weight="600" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" text-anchor="middle">카드 사진</text>
+      <text x="158" y="138" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">RGBA image</text>
+
+      <!-- 2. 이미지 임베딩 -->
+      <rect x="296" y="80" width="180" height="88" rx="6" fill="#f9fafb"/>
+      <rect x="296" y="80" width="180" height="88" rx="6" fill="#ffffff" stroke="#191f28" stroke-width="1"/>
+      <rect x="304" y="88" width="48" height="12" rx="2" fill="none" stroke="rgba(25,31,40,0.40)" stroke-width="0.8"/>
+      <text x="328" y="97" fill="rgba(25,31,40,0.8)" font-size="7" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">ENCODE</text>
+      <text x="386" y="124" fill="#191f28" font-size="12" font-weight="600" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" text-anchor="middle">이미지 임베딩</text>
+      <text x="386" y="140" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">Segmenter.setImage()</text>
+      <text x="386" y="156" fill="#4e5968" font-size="12" font-weight="500" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" text-anchor="middle">사진당 1회만 계산</text>
+
+      <!-- 3. 격자 프롬프트 예측 -->
+      <rect x="524" y="80" width="180" height="88" rx="6" fill="#f9fafb"/>
+      <rect x="524" y="80" width="180" height="88" rx="6" fill="#ffffff" stroke="#191f28" stroke-width="1"/>
+      <rect x="532" y="88" width="28" height="12" rx="2" fill="none" stroke="rgba(25,31,40,0.40)" stroke-width="0.8"/>
+      <text x="546" y="97" fill="rgba(25,31,40,0.8)" font-size="7" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">SAM</text>
+      <text x="614" y="124" fill="#191f28" font-size="12" font-weight="600" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" text-anchor="middle">격자 프롬프트 예측</text>
+      <text x="614" y="140" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">4x4 points, 0.2 ~ 0.8</text>
+      <text x="614" y="156" fill="#4e5968" font-size="12" font-weight="500" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" text-anchor="middle">점당 3개, 총 48 후보</text>
+
+      <!-- 4. 마스크 정리 + 사각형 피팅 -->
+      <rect x="752" y="80" width="180" height="88" rx="6" fill="#f9fafb"/>
+      <rect x="752" y="80" width="180" height="88" rx="6" fill="#ffffff" stroke="#191f28" stroke-width="1"/>
+      <rect x="760" y="88" width="60" height="12" rx="2" fill="none" stroke="rgba(25,31,40,0.40)" stroke-width="0.8"/>
+      <text x="790" y="97" fill="rgba(25,31,40,0.8)" font-size="7" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">GEOMETRY</text>
+      <text x="842" y="124" fill="#191f28" font-size="12" font-weight="600" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" text-anchor="middle">마스크 정리 + 사각형 피팅</text>
+      <text x="842" y="140" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">cleanMask -&gt; fitQuad</text>
+      <text x="842" y="156" fill="#4e5968" font-size="12" font-weight="500" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" text-anchor="middle">면적 4% 미만은 제외</text>
+
+      <!-- 5. 점수 매겨 1위 선택 (focal) -->
+      <rect x="752" y="236" width="180" height="88" rx="6" fill="#f9fafb"/>
+      <rect x="752" y="236" width="180" height="88" rx="6" fill="#e8f3ff" stroke="#3182f6" stroke-width="1"/>
+      <rect x="760" y="244" width="44" height="12" rx="2" fill="none" stroke="rgba(49,130,246,0.50)" stroke-width="0.8"/>
+      <text x="782" y="253" fill="#3182f6" font-size="7" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">SCORE</text>
+      <text x="842" y="280" fill="#191f28" font-size="12" font-weight="600" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" text-anchor="middle">점수 매겨 1위 선택</text>
+      <text x="842" y="296" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">rect^6 * sqrt(area)</text>
+      <text x="842" y="310" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">edge x0.6 / x0.2 / x0.02</text>
+
+      <!-- 6. 안쪽 후보 있음? (decision, focal) -->
+      <polygon points="614,220 704,280 614,340 524,280" fill="#f9fafb"/>
+      <polygon points="614,220 704,280 614,340 524,280" fill="#e8f3ff" stroke="#3182f6" stroke-width="1"/>
+      <text x="614" y="278" fill="#191f28" font-size="12" font-weight="600" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" text-anchor="middle">더 작은 안쪽</text>
+      <text x="614" y="294" fill="#191f28" font-size="12" font-weight="600" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" text-anchor="middle">후보 있음?</text>
+
+      <!-- 7. 안쪽 카드로 교체 -->
+      <rect x="296" y="236" width="180" height="88" rx="6" fill="#f9fafb"/>
+      <rect x="296" y="236" width="180" height="88" rx="6" fill="#ffffff" stroke="#191f28" stroke-width="1"/>
+      <rect x="304" y="244" width="48" height="12" rx="2" fill="none" stroke="rgba(25,31,40,0.40)" stroke-width="0.8"/>
+      <text x="328" y="253" fill="rgba(25,31,40,0.8)" font-size="7" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle" letter-spacing="0.08em">REFINE</text>
+      <text x="386" y="280" fill="#191f28" font-size="12" font-weight="600" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" text-anchor="middle">안쪽 카드로 교체</text>
+      <text x="386" y="296" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">rect&gt;=0.97, score&gt;=0.4x</text>
+      <text x="386" y="310" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">area 30~95%, overlap&gt;0.97</text>
+
+      <!-- 8. 끝: 크롭 결과 (oval) -->
+      <rect x="524" y="388" width="180" height="48" rx="24" fill="#f9fafb"/>
+      <rect x="524" y="388" width="180" height="48" rx="24" fill="rgba(78,89,104,0.10)" stroke="#8b95a1" stroke-width="1"/>
+      <text x="614" y="410" fill="#191f28" font-size="12" font-weight="600" font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" text-anchor="middle">크롭 결과</text>
+      <text x="614" y="426" fill="#4e5968" font-size="9" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" text-anchor="middle">warpQuad / cutoutMask</text>
+
+      <!-- ===== Legend strip ===== -->
+      <line x1="40" y1="468" x2="960" y2="468" stroke="#e5e8eb" stroke-width="0.8"/>
+      <text x="40" y="496" fill="#4e5968" font-size="8" font-family="'Geist Mono', 'SF Mono', Menlo, monospace" letter-spacing="0.14em">LEGEND</text>
+      <g font-family="'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif" font-size="12" font-weight="500" fill="#4e5968">
+        <rect x="120" y="484" width="20" height="14" rx="3" fill="#e8f3ff" stroke="#3182f6" stroke-width="1"/>
+        <text x="148" y="496">핵심 판정</text>
+        <rect x="240" y="484" width="20" height="14" rx="3" fill="#ffffff" stroke="#191f28" stroke-width="1"/>
+        <text x="268" y="496">처리 단계</text>
+        <polygon points="370,484 380,491 370,498 360,491" fill="#ffffff" stroke="#191f28" stroke-width="1"/>
+        <text x="388" y="496">분기</text>
+        <rect x="440" y="484" width="24" height="14" rx="7" fill="rgba(78,89,104,0.10)" stroke="#8b95a1" stroke-width="1"/>
+        <text x="472" y="496">시작 / 끝</text>
+        <line x1="560" y1="491" x2="592" y2="491" stroke="#3182f6" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow-accent)"/>
+        <text x="600" y="496">조건을 만족하는 동안 반복</text>
+      </g>
+    </svg>
+  </div>
+</body>
+</html>
