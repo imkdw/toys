@@ -2,6 +2,7 @@
   "name": "mat-zom-bol-gga",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.8.0",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

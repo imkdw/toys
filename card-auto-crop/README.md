@@ -29,19 +29,19 @@
 요구 사항: **Node.js 20.19 이상 또는 22.12 이상** (Vite 8 기준)
 
 ```bash
-npm install
-npm run dev        # http://localhost:5173
+pnpm install
+pnpm dev        # http://localhost:5173
 ```
 
 처음 실행하면 모델 파일(약 수십 MB)을 Hugging Face Hub에서 받아옵니다. 브라우저 캐시에 저장되므로 두 번째부터는 바로 뜹니다. 상단 오른쪽 상태 표시에 `모델 준비 완료 (GPU)` 또는 `(CPU)`가 뜨면 준비가 끝난 것입니다.
 
 | 명령 | 설명 |
 | --- | --- |
-| `npm run dev` | Vite 개발 서버 실행 |
-| `npm run build` | 타입 체크(`tsc --noEmit`) 후 `dist/`로 빌드 |
-| `npm run preview` | 빌드 결과 미리보기 |
-| `npm run batch -- [입력폴더] [출력폴더] [옵션]` | 폴더 일괄 크롭 |
-| `npm run detect` | `images/`를 감지만 하고 결과를 `public/detections.json`에 저장 (갤러리용) |
+| `pnpm dev` | Vite 개발 서버 실행 |
+| `pnpm build` | 타입 체크(`tsc --noEmit`) 후 `dist/`로 빌드 |
+| `pnpm preview` | 빌드 결과 미리보기 |
+| `pnpm batch -- [입력폴더] [출력폴더] [옵션]` | 폴더 일괄 크롭 |
+| `pnpm detect` | `images/`를 감지만 하고 결과를 `public/detections.json`에 저장 (갤러리용) |
 
 ---
 
@@ -73,20 +73,20 @@ npm run dev        # http://localhost:5173
 
 `images/`에 넣어둔 샘플 사진의 자동 탐지 결과를 격자로 보여줍니다. 파란 테두리가 잘라낼 영역, 어둡게 칠해진 부분이 버려지는 영역입니다.
 
-- 먼저 `npm run detect`로 `public/detections.json`을 만들어야 합니다. 없으면 안내 화면이 뜹니다.
+- 먼저 `pnpm detect`로 `public/detections.json`을 만들어야 합니다. 없으면 안내 화면이 뜹니다.
 - `확인 필요` 필터: 카드를 못 찾았거나 사각형도(rectangularity)가 0.96 미만인 사진만 모아 봅니다.
 - `편집` 버튼을 누르면 그 사진이 크롭하기 탭으로 넘어갑니다.
 
-> 샘플 이미지(`images/*.webp`)와 `public/detections.json`은 `.gitignore` 대상입니다. 저장소에는 `images/.keep`만 있으니 직접 사진을 넣어서 쓰세요. 갤러리는 개발 서버(`npm run dev`)에서만 동작합니다. 빌드 결과물에는 `images/`가 포함되지 않습니다.
+> 샘플 이미지(`images/*.webp`)와 `public/detections.json`은 `.gitignore` 대상입니다. 저장소에는 `images/.keep`만 있으니 직접 사진을 넣어서 쓰세요. 갤러리는 개발 서버(`pnpm dev`)에서만 동작합니다. 빌드 결과물에는 `images/`가 포함되지 않습니다.
 
 ---
 
 ## 사용법: CLI 배치
 
 ```bash
-npm run batch -- images out            # images/ 전체를 잘라서 out/*.png로 저장
-npm run batch -- images out --debug    # out/debug/*.jpg에 마스크와 사각형을 그린 확인용 썸네일도 저장
-npm run batch -- images out --no-save --json=public/detections.json   # 자르지 않고 감지 결과만 JSON으로
+pnpm batch -- images out            # images/ 전체를 잘라서 out/*.png로 저장
+pnpm batch -- images out --debug    # out/debug/*.jpg에 마스크와 사각형을 그린 확인용 썸네일도 저장
+pnpm batch -- images out --no-save --json=public/detections.json   # 자르지 않고 감지 결과만 JSON으로
 ```
 
 | 인자 / 옵션 | 기본값 | 설명 |

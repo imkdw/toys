@@ -38,7 +38,7 @@ export function Gallery({ onOpen }: { onOpen: (file: File) => void }) {
       <div className="gallery-empty">
         <strong>감지 결과가 아직 없어요</strong>
         <span>터미널에서 아래 명령을 먼저 실행해주세요</span>
-        <code>npm run detect</code>
+        <code>pnpm detect</code>
       </div>
     );
   if (!data) return <div className="gallery-empty">불러오는 중...</div>;
