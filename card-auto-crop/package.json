@@ -1,0 +1,27 @@
+{
+  "name": "mat-zom-bol-gga",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "batch": "tsx scripts/batch.ts",
+    "detect": "tsx scripts/batch.ts images out --no-save --json=public/detections.json"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "sharp": "^0.35.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  }
+}
