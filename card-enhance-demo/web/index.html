@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>카드 보정 데모</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>카드 보정 데모</h1>
+      <p class="lead">카드 사진을 올리면 codex가 카드 꼭짓점과 색 보정 값을 분석하고, 코드가 원근 보정(자유 변형) + 밝기/색 보정을 합니다. 이미지를 새로 그리지 않아서 원본 카드 그대로 남고, 여백 없는 카드만 돌려줍니다.</p>
+      <label id="drop" class="drop">
+        <input id="file" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden />
+        <strong>사진을 끌어다 놓거나 클릭해서 선택</strong>
+        <span>jpg / png / webp, 15MB 이하, 여러 장 가능</span>
+      </label>
+      <p id="error" class="error" hidden></p>
+      <section id="jobs"></section>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

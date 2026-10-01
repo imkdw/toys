@@ -1,0 +1,31 @@
+:root { --bg: #f6f5f2; --fg: #1c1c1c; --muted: #6b6b6b; --card: #fff; --line: #e2e0da; --accent: #5b4bd6; --code: #f0eee9; --well: #e9e7e2; --ok: #1f8a4c; --bad: #c43d3d; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #141414; --fg: #ececec; --muted: #9a9a9a; --card: #1d1d1d; --line: #2e2e2e; --accent: #a99cff; --code: #262626; --well: #101010; --ok: #4fc47f; --bad: #ef6f6f; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 -apple-system, 'Apple SD Gothic Neo', sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { margin: 0 0 6px; font-size: 26px; }
+.lead { color: var(--muted); margin: 0 0 20px; }
+.drop { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 36px 16px; border: 2px dashed var(--line); border-radius: 14px; background: var(--card); cursor: pointer; text-align: center; }
+.drop span { color: var(--muted); font-size: 13px; }
+.drop.over { border-color: var(--accent); }
+.error { color: var(--bad); }
+.job { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; margin-top: 20px; }
+.job header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.steps { display: flex; gap: 6px; font-size: 13px; }
+.steps span { padding: 2px 10px; border-radius: 99px; background: var(--well); color: var(--muted); }
+.steps .active { background: var(--accent); color: #fff; }
+.steps .past { color: var(--ok); }
+.steps .failed { background: var(--bad); color: #fff; }
+.meta { color: var(--muted); font-size: 13px; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+figure { margin: 0; }
+figure a, .placeholder { display: flex; align-items: center; justify-content: center; height: 420px; padding: 8px; border-radius: 8px; background: var(--well); color: var(--muted); }
+img { max-width: 100%; max-height: 100%; display: block; border-radius: 4px; }
+figcaption { text-align: center; color: var(--muted); font-size: 13px; margin-top: 6px; font-weight: 600; }
+details { margin-top: 10px; }
+summary { cursor: pointer; font-weight: 600; }
+pre { white-space: pre-wrap; word-break: break-word; background: var(--code); padding: 14px; border-radius: 8px; font-size: 13px; margin: 10px 0 0; }
+.url { display: block; margin-top: 10px; font-size: 13px; word-break: break-all; }
+@media (max-width: 700px) { .pair { grid-template-columns: 1fr; } figure a, .placeholder { height: 300px; } }
