@@ -1,0 +1,25 @@
+node_modules/
+*.tsbuildinfo
+.DS_Store
+*.log
+
+# 계획 문서 (대상 URL과 작품 정보 포함)
+PLAN.md
+
+# 영상과 중간 산출물
+work/
+*.mp4
+*.m4a
+*.webm
+
+# 프레임과 검수 시트
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# 대상 작품 정보가 담기는 산출물
+episodes.json
+segments.json
+overrides.json
+REPORT.md
