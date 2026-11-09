@@ -4,22 +4,40 @@ version = "0.1.0"
 edition = "2024"
 description = "키보드를 치면 바탕화면 위의 캐릭터가 따라서 타이핑하는 macOS 오버레이"
 publish = false
+default-run = "typing-pet"
+
+[lib]
+name = "typing_pet"
+path = "src/lib.rs"
+
+[[bin]]
+name = "typing-pet"
+path = "src/main.rs"
+
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
 
 [dependencies]
 # 창 / 렌더링
 winit = "0.30"
 wgpu = "30.0.1"
+pollster = "0.4"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+fast_image_resize = "5"
 
-# 전역 입력 훅
-rdev = "0.5.3"
+# macOS 창 설정 (창 레벨, Space 동작)
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSView", "NSResponder", "NSApplication", "NSRunningApplication", "NSScreen", "NSGraphics", "NSWorkspace"] }
+objc2-foundation = "0.3"
 
 # 메뉴바
 tray-icon = "0.26.1"
 muda = "0.21.2"
 
-# 설정 / 매니페스트
+# 설정 / 매니페스트 / 트레이스
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1"
 toml = "1.2.1"
 dirs = "7.0.0"
 
@@ -27,7 +45,23 @@ dirs = "7.0.0"
 log = "0.4.35"
 env_logger = "0.11.11"
 
+[dev-dependencies]
+proptest = "1"
+
 [profile.release]
 lto = true
 codegen-units = 1
 strip = true
+
+# 개발 빌드도 최적화한다 (트레이스는 디버그 빌드에만 있으므로 검증은 이 빌드로 한다)
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[package.metadata.bundle]
+name = "TypingPet"
+identifier = "dev.imkdw.typing-pet"
+resources = ["characters"]
+osx_minimum_system_version = "13.0"
