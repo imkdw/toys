@@ -1,0 +1,23 @@
+# 검증용 가짜 레이어 세트. art/scripts/make_test_layers.py 로 만든다.
+name = "_test"
+canvas = 512
+layers = [
+  "base",
+  "head/normal", "head/excited", "head/dizzy", "head/dizzy_wiggle", "head/overheat", "head/sleepy", "head/sunglasses",
+  "paw_l/up", "paw_l/down",
+  "paw_r/up", "paw_r/down", "paw_r/center", "paw_r/mouse", "paw_r/mouse_click",
+  "fx/sunglasses",
+  "full/gesture",
+  "mask/head", "mask/paw_l", "mask/paw_r",
+]
+head_anchor = [256, 330]
+
+[masks]
+head = "mask/head"
+paw_l = "mask/paw_l"
+paw_r = "mask/paw_r"
+
+[tips]
+"paw_l/down" = [160, 392]
+"paw_r/down" = [320, 392]
+"paw_r/center" = [250, 395]
