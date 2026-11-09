@@ -1,0 +1,33 @@
+[package]
+name = "typing-pet"
+version = "0.1.0"
+edition = "2024"
+description = "키보드를 치면 바탕화면 위의 캐릭터가 따라서 타이핑하는 macOS 오버레이"
+publish = false
+
+[dependencies]
+# 창 / 렌더링
+winit = "0.30"
+wgpu = "30.0.1"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+
+# 전역 입력 훅
+rdev = "0.5.3"
+
+# 메뉴바
+tray-icon = "0.26.1"
+muda = "0.21.2"
+
+# 설정 / 매니페스트
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.1"
+dirs = "7.0.0"
+
+# 로그
+log = "0.4.35"
+env_logger = "0.11.11"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
