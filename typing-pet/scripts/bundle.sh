@@ -72,6 +72,9 @@ fi
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/characters"
 cp "$bin" "$APP/Contents/MacOS/typing-pet"
+# 앱 아이콘 (우사기 레이어로 만든다. 비공개 에셋이라 저장소에 두지 않고 target/icon 에 매번 만든다)
+python3 scripts/make_icon.py >/dev/null
+cp target/icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # 캐릭터: 테스트용(_*)과 기준 이미지는 넣지 않는다
 for d in characters/*/; do
   name="$(basename "$d")"
@@ -91,6 +94,7 @@ cat >"$APP/Contents/Info.plist" <<EOF
   <key>CFBundleIdentifier</key><string>dev.imkdw.typing-pet</string>
   <key>CFBundleExecutable</key><string>typing-pet</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
