@@ -415,11 +415,11 @@ fn render_list_order_matches_plan() {
         })
         .collect();
     assert_eq!(kinds, vec!["base", "paw_l/down", "paw_r/center", "glow", "glow", "head/normal"]);
-    // 누름 연출: 눌린 발은 아래로 이동
-    assert!(f.cmds[1].offset[1] > 0.0 && f.cmds[2].offset[1] > 0.0);
-    // 80ms 뒤에는 제자리, 220ms 뒤에는 빛 없음
+    // 앞발 레이어에는 책상/키보드 조각이 들어 있으므로 누를 때도 제자리에 그린다
+    assert_eq!(f.cmds[1].offset, [0.0, 0.0]);
+    assert_eq!(f.cmds[2].offset, [0.0, 0.0]);
+    // 220ms 뒤에는 빛 없음
     let f = a.frame(t0 + ms(230));
-    assert_eq!(f.cmds[1].offset[1], 0.0);
     assert!(!f.cmds.iter().any(|c| matches!(c.kind, DrawKind::Glow { .. })));
     assert!(!a.animating(t0 + ms(400)));
 }
@@ -531,4 +531,73 @@ fn config_roundtrip() {
     std::fs::write(&path, "not = [valid").unwrap();
     assert_eq!(typing_pet::config::Config::load(), typing_pet::config::Config::default());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+// ---------- 마우스 연출 ----------
+
+fn swing_manifest() -> Manifest {
+    let mut m = test_manifest();
+    m.layers.push("paw_r/mouse_bg".into());
+    m.layers.push("fx/mouse_arm".into());
+    m.swing = Some(typing_pet::config::Swing { root: [300.0, 300.0], tip: [340.0, 400.0], radius: [20.0, 40.0] });
+    m
+}
+
+#[test]
+fn mouse_move_swings_only_the_arm() {
+    let m = swing_manifest();
+    let t0 = Instant::now();
+    let mut pet = Pet::new(m.timing.clone(), m.keys.clone(), t0);
+    let mut a = Animator::new(&m, 240.0, t0);
+    // 100ms 마다 마우스 이동 1초
+    for k in 0..10 {
+        let t = t0 + ms(k * 100);
+        pet.on_input(Input::MouseMove, t);
+        let ev = pet.drain_events();
+        assert!(ev.contains(&PetEvent::MouseMove));
+        a.update(pet.state(t), &ev, t);
+    }
+    let names = |f: &typing_pet::anim::Frame| f.layer_names().into_iter().map(String::from).collect::<Vec<_>>();
+    let f = a.frame(t0 + ms(950));
+    assert!(names(&f).contains(&"paw_r/mouse_bg".to_string()) && names(&f).contains(&"fx/mouse_arm".to_string()));
+    assert!(!names(&f).contains(&"paw_r/mouse".to_string()), "한 장짜리 마우스 자세 대신 바탕 + 팔");
+    // 팔만 휘고(warp), 다른 레이어는 움직이지 않는다
+    let mut moved = 0;
+    for k in 0..12 {
+        let f = a.frame(t0 + ms(300 + k * 25));
+        for c in &f.cmds {
+            if let Some(w) = &c.warp {
+                assert!(matches!(&c.kind, DrawKind::Layer { name } if name == "fx/mouse_arm"));
+                if w.d[0].abs() > 1.0 {
+                    moved += 1;
+                }
+            } else {
+                assert_eq!(c.offset[0], 0.0);
+            }
+        }
+    }
+    assert!(moved >= 6, "흔들리는 프레임 {moved}");
+    assert!(a.animating(t0 + ms(950)));
+    // 마지막 이동(900ms) 뒤 hold + fade 가 지나면 멈춘다 (손은 아직 마우스 위)
+    let t = t0 + ms(900 + m.anim.swing_hold_ms + m.anim.swing_fade_ms + 10);
+    pet.advance(t);
+    a.update(pet.state(t), &pet.drain_events(), t);
+    assert_eq!(pet.state(t).paw_r, PawR::Mouse);
+    let f = a.frame(t);
+    let w = f.cmds.iter().find_map(|c| c.warp).expect("팔");
+    assert_eq!(w.d, [0.0, 0.0]);
+    assert!(!a.animating(t));
+}
+
+#[test]
+fn mouse_pose_without_swing_layers_is_one_layer() {
+    let m = test_manifest();
+    let t0 = Instant::now();
+    let mut a = Animator::new(&m, 240.0, t0);
+    let s = PetState { paw_r: PawR::Mouse, ..Default::default() };
+    a.update(s, &[PetEvent::MouseMove], t0);
+    let f = a.frame(t0 + ms(50));
+    assert!(f.layer_names().contains(&"paw_r/mouse"));
+    assert!(f.cmds.iter().all(|c| c.warp.is_none()));
+    assert!(!a.animating(t0 + ms(50)));
 }
