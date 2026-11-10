@@ -9,7 +9,6 @@ use crate::config::{Config, SIZES};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrayAction {
     ToggleVisible,
-    ToggleEditPosition,
     ToggleBreathing,
     Size(f64),
     ToggleLoginItem,
@@ -21,7 +20,6 @@ pub struct Tray {
     _icon: TrayIcon,
     menu: Menu,
     visible: CheckMenuItem,
-    edit: CheckMenuItem,
     breathing: CheckMenuItem,
     login: CheckMenuItem,
     sizes: Vec<(f64, CheckMenuItem)>,
@@ -62,7 +60,6 @@ impl Tray {
     pub fn new(cfg: &Config, send: impl Fn(TrayAction) + Send + Sync + 'static) -> Result<Self, String> {
         let menu = Menu::new();
         let visible = CheckMenuItem::new("보이기", true, cfg.visible, None);
-        let edit = CheckMenuItem::new("위치 편집 (드래그로 이동)", true, false, None);
         let breathing = CheckMenuItem::new("숨쉬기", true, cfg.breathing, None);
         let size_menu = Submenu::new("크기", true);
         let mut sizes = Vec::new();
@@ -74,12 +71,11 @@ impl Tray {
         let login = CheckMenuItem::new("로그인 시 자동 실행", crate::mac::bundle_path().is_some(), crate::mac::login_item_enabled(), None);
         let warning = MenuItem::new("⚠ 입력 모니터링 권한 필요 (설정 열기)", true, None);
         let quit = MenuItem::new("종료", true, None);
-        menu.append_items(&[&visible, &edit, &breathing, &size_menu, &login, &PredefinedMenuItem::separator(), &quit])
+        menu.append_items(&[&visible, &breathing, &size_menu, &login, &PredefinedMenuItem::separator(), &quit])
             .map_err(|e| e.to_string())?;
 
         let mut ids = vec![
             (visible.id().clone(), TrayAction::ToggleVisible),
-            (edit.id().clone(), TrayAction::ToggleEditPosition),
             (breathing.id().clone(), TrayAction::ToggleBreathing),
             (login.id().clone(), TrayAction::ToggleLoginItem),
             (warning.id().clone(), TrayAction::OpenPermissionSettings),
@@ -101,12 +97,11 @@ impl Tray {
             .with_tooltip("typing-pet")
             .build()
             .map_err(|e| e.to_string())?;
-        Ok(Self { _icon: icon, menu, visible, edit, breathing, login, sizes, warning, warning_shown: false, ids })
+        Ok(Self { _icon: icon, menu, visible, breathing, login, sizes, warning, warning_shown: false, ids })
     }
 
-    pub fn sync(&self, cfg: &Config, editing: bool) {
+    pub fn sync(&self, cfg: &Config) {
         self.visible.set_checked(cfg.visible);
-        self.edit.set_checked(editing);
         self.breathing.set_checked(cfg.breathing);
         self.login.set_checked(crate::mac::login_item_enabled());
         for (s, item) in &self.sizes {

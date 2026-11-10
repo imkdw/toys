@@ -134,6 +134,43 @@ pub fn load_layers(m: &Manifest) -> HashMap<String, Arc<SrcImage>> {
     out
 }
 
+/// 캐릭터가 그려질 수 있는 자리 (모든 레이어 알파의 합집합, n x n 칸). 커서가 캐릭터 위에 있는지 볼 때 쓴다.
+#[derive(Debug, Clone)]
+pub struct HitMap {
+    n: usize,
+    cells: Vec<bool>,
+}
+
+impl HitMap {
+    pub fn new(layers: &HashMap<String, Arc<SrcImage>>, n: usize) -> Self {
+        let mut cells = vec![false; n * n];
+        for (name, img) in layers {
+            if name.starts_with("mask/") {
+                continue;
+            }
+            let (w, h) = (img.w as usize, img.h as usize);
+            for y in 0..h {
+                let cy = y * n / h;
+                for x in 0..w {
+                    if img.data[(y * w + x) * 4 + 3] > 128 {
+                        cells[cy * n + x * n / w] = true;
+                    }
+                }
+            }
+        }
+        Self { n, cells }
+    }
+
+    /// u, v: 창 안 위치 (0~1).
+    pub fn hit(&self, u: f64, v: f64) -> bool {
+        if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
+            return false;
+        }
+        let (x, y) = ((u * self.n as f64) as usize, (v * self.n as f64) as usize);
+        self.cells[y * self.n + x]
+    }
+}
+
 /// premultiplied 이미지를 Lanczos3 로 정확한 픽셀 크기에 맞춘다.
 pub fn resize(src: &SrcImage, size: u32) -> Vec<u8> {
     if src.w == size && src.h == size {

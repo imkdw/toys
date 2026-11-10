@@ -3,7 +3,8 @@
 //! winit 의 AlwaysOnTop 만으로는 전체화면 앱 위와 다른 Space 에서 안 보인다.
 //! NSWindow 레벨을 올리고 `canJoinAllSpaces | fullScreenAuxiliary | stationary` 를 준다.
 
-use objc2_app_kit::{NSView, NSWindow, NSWindowCollectionBehavior};
+use objc2::rc::Retained;
+use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSView, NSWindow, NSWindowCollectionBehavior, NSWorkspace};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
@@ -34,6 +35,17 @@ pub fn setup_overlay(window: &Window) {
 /// CGWindowID (screencapture -l 에 쓴다).
 pub fn window_number(window: &Window) -> Option<isize> {
     ns_window(window).map(|w| w.windowNumber())
+}
+
+/// 지금 맨 앞 앱 (자기 자신이면 None). 캐릭터를 끌어 옮긴 뒤 포커스를 돌려주는 데 쓴다.
+pub fn frontmost_app() -> Option<Retained<NSRunningApplication>> {
+    let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+    let me = NSRunningApplication::currentApplication();
+    (app.processIdentifier() != me.processIdentifier()).then_some(app)
+}
+
+pub fn activate(app: &NSRunningApplication) {
+    app.activateWithOptions(NSApplicationActivationOptions::empty());
 }
 
 /// 시스템 설정의 "입력 모니터링" 화면을 연다.

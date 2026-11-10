@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 
 use typing_pet::anim::Animator;
 use typing_pet::config::{Config, Manifest};
-use typing_pet::input::{self, Input};
+use typing_pet::input::{self, Cursor, Input};
 use typing_pet::pet::{Pet, PetState};
-use typing_pet::render::{self, Renderer};
+use typing_pet::render::{self, HitMap, Renderer};
 use typing_pet::tray::{Tray, TrayAction};
 use typing_pet::{mac, trace};
 use winit::application::ApplicationHandler;
@@ -22,6 +22,7 @@ use winit::window::{Window, WindowId, WindowLevel};
 #[derive(Debug, Clone)]
 enum AppEvent {
     Input(Input, Instant),
+    Cursor(Cursor),
     Tray(TrayAction),
 }
 
@@ -29,6 +30,7 @@ struct WindowGpu {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     renderer: Renderer,
+    hit: HitMap,
 }
 
 impl WindowGpu {
@@ -61,9 +63,11 @@ impl WindowGpu {
             std::env::var("TYPING_PET_FRAME_LATENCY").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
         log::info!("surface format={format:?} alpha={alpha_mode:?}");
         surface.configure(&device, &config);
-        let mut renderer = Renderer::new(device, queue, format, render::load_layers(m), m.canvas);
+        let layers = render::load_layers(m);
+        let hit = HitMap::new(&layers, 128);
+        let mut renderer = Renderer::new(device, queue, format, layers, m.canvas);
         renderer.prepare(size.width.max(size.height));
-        Ok(Self { surface, config, renderer })
+        Ok(Self { surface, config, renderer, hit })
     }
 
     fn resize(&mut self, w: u32, h: u32) {
@@ -86,7 +90,12 @@ struct App {
     gpu: Option<WindowGpu>,
     tray: Option<Tray>,
     proxy: EventLoopProxy<AppEvent>,
-    editing: bool,
+    /// 커서가 캐릭터 위에 있어서 창이 클릭을 받는 중.
+    hover: bool,
+    /// 캐릭터를 끌어 옮기는 중 (왼쪽 버튼을 뗄 때까지).
+    dragging: bool,
+    /// 끌기 전에 맨 앞에 있던 앱. 끌고 나면 포커스를 돌려준다.
+    prev_app: Option<objc2::rc::Retained<objc2_app_kit::NSRunningApplication>>,
     tap_ok: bool,
     next_tap_retry: Option<Instant>,
     redraw_at: Option<Instant>,
@@ -111,7 +120,9 @@ impl App {
             gpu: None,
             tray: None,
             proxy,
-            editing: false,
+            hover: false,
+            dragging: false,
+            prev_app: None,
             tap_ok: false,
             next_tap_retry: None,
             redraw_at: None,
@@ -136,10 +147,17 @@ impl App {
             return;
         }
         let proxy = self.proxy.clone();
+        let proxy_c = self.proxy.clone();
         let throttle = Duration::from_millis(self.manifest.timing.mouse_throttle_ms);
-        match input::spawn(throttle, move |i, at| {
-            let _ = proxy.send_event(AppEvent::Input(i, at));
-        }) {
+        match input::spawn(
+            throttle,
+            move |i, at| {
+                let _ = proxy.send_event(AppEvent::Input(i, at));
+            },
+            move |c| {
+                let _ = proxy_c.send_event(AppEvent::Cursor(c));
+            },
+        ) {
             Ok(()) => {
                 log::info!("입력 감지 시작");
                 self.tap_ok = true;
@@ -231,6 +249,45 @@ impl App {
         }
     }
 
+    /// 커서가 캐릭터(불투명한 곳) 위에 있을 때만 창이 클릭을 받게 한다. 나머지는 뒤 앱으로 그대로 간다.
+    fn on_cursor(&mut self, c: Cursor) {
+        match c {
+            Cursor::Up => {
+                if self.dragging {
+                    self.dragging = false;
+                    self.save();
+                    if let Some(app) = self.prev_app.take() {
+                        mac::activate(&app);
+                    }
+                }
+            }
+            Cursor::Move(x, y) => {
+                if self.dragging {
+                    return;
+                }
+                let over = match (&self.window, &self.gpu) {
+                    (Some(w), Some(g)) if self.cfg.visible => w
+                        .outer_position()
+                        .map(|p| {
+                            let p = p.to_logical::<f64>(w.scale_factor());
+                            g.hit.hit((x - p.x) / self.cfg.size, (y - p.y) / self.cfg.size)
+                        })
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                if over != self.hover {
+                    self.hover = over;
+                    if over {
+                        self.prev_app = mac::frontmost_app();
+                    }
+                    if let Some(w) = &self.window {
+                        let _ = w.set_cursor_hittest(over);
+                    }
+                }
+            }
+        }
+    }
+
     fn request_redraw(&self) {
         if let Some(w) = &self.window {
             w.request_redraw();
@@ -317,20 +374,12 @@ impl App {
                 self.cfg.visible = !self.cfg.visible;
                 if let Some(w) = &self.window {
                     w.set_visible(self.cfg.visible);
-                }
-                self.save();
-            }
-            TrayAction::ToggleEditPosition => {
-                self.editing = !self.editing;
-                if let Some(w) = &self.window {
-                    let _ = w.set_cursor_hittest(self.editing);
-                    if self.editing {
-                        w.set_visible(true);
+                    if !self.cfg.visible && self.hover {
+                        self.hover = false;
+                        let _ = w.set_cursor_hittest(false);
                     }
                 }
-                if !self.editing {
-                    self.save();
-                }
+                self.save();
             }
             TrayAction::ToggleBreathing => {
                 self.cfg.breathing = !self.cfg.breathing;
@@ -358,7 +407,7 @@ impl App {
             }
         }
         if let Some(t) = &self.tray {
-            t.sync(&self.cfg, self.editing);
+            t.sync(&self.cfg);
         }
     }
 
@@ -428,6 +477,7 @@ impl ApplicationHandler<AppEvent> for App {
                 self.pet.on_input(i, at);
                 self.sync(Instant::now());
             }
+            AppEvent::Cursor(c) => self.on_cursor(c),
             AppEvent::Tray(a) => self.on_tray(el, a),
         }
     }
@@ -455,8 +505,9 @@ impl ApplicationHandler<AppEvent> for App {
                     self.cfg.position = Some((p.x, p.y));
                 }
             }
-            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if self.editing => {
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if self.hover => {
                 if let Some(w) = &self.window {
+                    self.dragging = true;
                     let _ = w.drag_window();
                 }
             }

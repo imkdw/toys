@@ -22,6 +22,14 @@ pub enum Input {
     MouseClick,
 }
 
+/// 커서 위치 (전역 좌표, 주 화면 좌상단 원점, pt). 캐릭터 위에 커서가 있을 때만 창이 클릭을 받게 하는 데 쓴다.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Cursor {
+    Move(f64, f64),
+    /// 왼쪽 버튼을 뗌 (드래그 끝).
+    Up,
+}
+
 /// 화면 기준 키 위치.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Zone {
@@ -137,6 +145,9 @@ impl Converter {
 #[cfg(target_os = "macos")]
 pub use tap::{has_listen_permission, request_listen_permission, spawn};
 
+/// 커서 위치를 이 간격보다 자주 보내지 않는다 (호버 판정용이라 60Hz 면 충분).
+pub const CURSOR_INTERVAL: Duration = Duration::from_millis(16);
+
 #[cfg(target_os = "macos")]
 mod tap {
     //! CGEventTap 직접 FFI. rdev 는 키마다 TIS 함수를 불러 별도 스레드에서 크래시할 수 있어 쓰지 않는다.
@@ -145,7 +156,7 @@ mod tap {
     use std::sync::atomic::{AtomicPtr, Ordering};
     use std::time::{Duration, Instant};
 
-    use super::{Converter, Input, RawEvent};
+    use super::{CURSOR_INTERVAL, Converter, Cursor, Input, RawEvent};
 
     type CFMachPortRef = *mut c_void;
     type CFRunLoopSourceRef = *mut c_void;
@@ -153,6 +164,13 @@ mod tap {
     type CGEventRef = *mut c_void;
     type CGEventTapProxy = *mut c_void;
     type TapCallback = extern "C" fn(CGEventTapProxy, u32, CGEventRef, *mut c_void) -> CGEventRef;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
 
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
@@ -167,6 +185,7 @@ mod tap {
         fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
         fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
         fn CGEventGetFlags(event: CGEventRef) -> u64;
+        fn CGEventGetLocation(event: CGEventRef) -> CGPoint;
         fn CGPreflightListenEventAccess() -> bool;
         fn CGRequestListenEventAccess() -> bool;
     }
@@ -185,6 +204,7 @@ mod tap {
     const K_CG_LISTEN_ONLY: u32 = 1;
 
     const LEFT_DOWN: u32 = 1;
+    const LEFT_UP: u32 = 2;
     const RIGHT_DOWN: u32 = 3;
     const MOUSE_MOVED: u32 = 5;
     const LEFT_DRAGGED: u32 = 6;
@@ -206,6 +226,8 @@ mod tap {
     struct Ctx {
         conv: Converter,
         send: Box<dyn Fn(Input, Instant) + Send>,
+        cursor: Box<dyn Fn(Cursor) + Send>,
+        last_cursor: Option<Instant>,
     }
 
     pub fn has_listen_permission() -> bool {
@@ -230,6 +252,10 @@ mod tap {
                 log::warn!("이벤트 탭이 꺼져서 다시 켬 (type={ty:#x})");
                 return event;
             }
+            LEFT_UP => {
+                (ctx.cursor)(Cursor::Up);
+                return event;
+            }
             KEY_DOWN => RawEvent::KeyDown {
                 code: unsafe { CGEventGetIntegerValueField(event, FIELD_KEYCODE) } as u16,
                 autorepeat: unsafe { CGEventGetIntegerValueField(event, FIELD_AUTOREPEAT) } != 0,
@@ -245,6 +271,13 @@ mod tap {
             LEFT_DOWN | RIGHT_DOWN | OTHER_DOWN => RawEvent::MouseDown,
             _ => return event,
         };
+        if matches!(raw, RawEvent::MouseMove | RawEvent::MouseDrag | RawEvent::MouseDown)
+            && (raw == RawEvent::MouseDown || ctx.last_cursor.is_none_or(|t| now.duration_since(t) >= CURSOR_INTERVAL))
+        {
+            ctx.last_cursor = Some(now);
+            let p = unsafe { CGEventGetLocation(event) };
+            (ctx.cursor)(Cursor::Move(p.x, p.y));
+        }
         if let Some(input) = ctx.conv.convert(raw, now) {
             (ctx.send)(input, now);
         }
@@ -255,18 +288,24 @@ mod tap {
     pub fn spawn(
         mouse_throttle: Duration,
         send: impl Fn(Input, Instant) + Send + 'static,
+        cursor: impl Fn(Cursor) + Send + 'static,
     ) -> Result<(), String> {
         let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
         std::thread::Builder::new()
             .name("event-tap".into())
             .spawn(move || {
                 let mask: u64 = [
-                    LEFT_DOWN, RIGHT_DOWN, OTHER_DOWN, MOUSE_MOVED, LEFT_DRAGGED, RIGHT_DRAGGED, OTHER_DRAGGED,
+                    LEFT_DOWN, LEFT_UP, RIGHT_DOWN, OTHER_DOWN, MOUSE_MOVED, LEFT_DRAGGED, RIGHT_DRAGGED, OTHER_DRAGGED,
                     KEY_DOWN, KEY_UP, FLAGS_CHANGED, SCROLL,
                 ]
                 .iter()
                 .fold(0, |m, t| m | (1u64 << t));
-                let ctx = Box::into_raw(Box::new(Ctx { conv: Converter::new(mouse_throttle), send: Box::new(send) }));
+                let ctx = Box::into_raw(Box::new(Ctx {
+                    conv: Converter::new(mouse_throttle),
+                    send: Box::new(send),
+                    cursor: Box::new(cursor),
+                    last_cursor: None,
+                }));
                 let tap = unsafe {
                     CGEventTapCreate(K_CG_SESSION_EVENT_TAP, K_CG_HEAD_INSERT, K_CG_LISTEN_ONLY, mask, callback, ctx as *mut c_void)
                 };
