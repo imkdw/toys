@@ -601,3 +601,27 @@ fn mouse_pose_without_swing_layers_is_one_layer() {
     assert!(f.cmds.iter().all(|c| c.warp.is_none()));
     assert!(!a.animating(t0 + ms(50)));
 }
+
+#[test]
+fn hit_map_follows_layer_alpha() {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use typing_pet::render::{HitMap, SrcImage};
+    // 왼쪽 위 사분면만 불투명
+    let n = 64u32;
+    let mut data = vec![0u8; (n * n * 4) as usize];
+    for y in 0..n / 2 {
+        for x in 0..n / 2 {
+            data[((y * n + x) * 4 + 3) as usize] = 255;
+        }
+    }
+    let mut layers = HashMap::new();
+    layers.insert("base".to_string(), Arc::new(SrcImage { w: n, h: n, data: data.clone() }));
+    // 마스크는 무시
+    layers.insert("mask/head".to_string(), Arc::new(SrcImage { w: n, h: n, data: vec![255; (n * n * 4) as usize] }));
+    let h = HitMap::new(&layers, 16);
+    assert!(h.hit(0.1, 0.1));
+    assert!(!h.hit(0.9, 0.9));
+    assert!(!h.hit(0.1, 0.9));
+    assert!(!h.hit(-0.1, 0.1) && !h.hit(1.0, 0.5));
+}
