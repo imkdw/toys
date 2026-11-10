@@ -720,3 +720,54 @@ fn hit_map_follows_layer_alpha() {
     assert!(!h.hit(0.1, 0.9));
     assert!(!h.hit(-0.1, 0.1) && !h.hit(1.0, 0.5));
 }
+
+#[test]
+fn available_characters_sorted_by_title_without_test_dirs() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("chars_available");
+    let _ = std::fs::remove_dir_all(&root);
+    let put = |dir: &str, manifest: Option<&str>| {
+        let d = root.join(dir);
+        std::fs::create_dir_all(&d).unwrap();
+        if let Some(m) = manifest {
+            std::fs::write(d.join("manifest.toml"), m).unwrap();
+        }
+    };
+    put("usagi", Some("name = \"usagi\"\ntitle = \"우사기\"\n"));
+    put("hachiware", Some("name = \"hachiware\"\ntitle = \"하치와레\"\n"));
+    put("chiikawa", Some("name = \"chiikawa\"\ntitle = \"치이카와\"\n"));
+    put("momonga", Some("name = \"momonga\"\n")); // title 없으면 폴더 이름
+    put("_test", Some("name = \"_test\"\n"));
+    put("empty", None); // manifest 없음
+    let got = Manifest::available_in(&root);
+    let want: Vec<(String, String)> = [("momonga", "momonga"), ("usagi", "우사기"), ("chiikawa", "치이카와"), ("hachiware", "하치와레")]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+    assert_eq!(got, want);
+}
+
+/// 메뉴로 캐릭터를 바꿀 때 쓰는 `Renderer::set_layers`: 같은 렌더러에서 레이어만 바꾼 결과가
+/// 처음부터 그 캐릭터로 만든 렌더러와 같아야 한다 (이전 캐릭터 텍스처/바인드 그룹이 남지 않음).
+#[test]
+fn set_layers_matches_fresh_renderer() {
+    let chars = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("characters");
+    let other = Manifest::available_in(&chars).into_iter().map(|(n, _)| n).next();
+    let a = test_manifest();
+    // 실제 캐릭터가 없으면(공개 저장소) _test 를 크기만 다르게 다시 읽은 것으로 대신한다
+    let b = match &other {
+        Some(n) => Manifest::load_dir(&chars.join(n)).unwrap(),
+        None => test_manifest(),
+    };
+    let st = PetState::default();
+    let fa = typing_pet::settled_frame(&a, st, false);
+    let fb = typing_pet::settled_frame(&b, st, false);
+    let Ok(mut off) = typing_pet::render::Offscreen::new(&a, 96) else { return }; // GPU 없는 환경
+    let before = off.render(&fa);
+    off.renderer.set_layers(typing_pet::render::load_layers(&b), b.canvas);
+    let swapped = off.render(&fb);
+    if other.is_some() {
+        assert_ne!(before.as_raw(), swapped.as_raw(), "캐릭터를 바꿨는데 그림이 그대로");
+    }
+    let mut fresh = typing_pet::render::Offscreen::new(&b, 96).unwrap();
+    assert_eq!(swapped.as_raw(), fresh.render(&fb).as_raw());
+}
