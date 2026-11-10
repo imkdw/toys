@@ -27,7 +27,7 @@ MASKS = ROOT / "art/masks"
 GROUPS = {
     "paw_l": ["paw_l/down"],
     "paw_r": ["paw_r/down", "paw_r/center", "paw_r/mouse", "paw_r/mouse_click"],
-    "head": ["head/excited", "head/dizzy", "head/dizzy_wiggle", "head/overheat", "head/sleepy", "head/sunglasses"],
+    "head": ["head/excited", "head/dizzy", "head/overheat", "head/sleepy", "head/sunglasses"],
 }
 MARGIN = 10
 FEATHER = 6
@@ -88,8 +88,8 @@ def main() -> None:
     diffs: dict[str, np.ndarray] = {}
     for layers in GROUPS.values():
         for layer in layers:
-            p = WORK / "matched" / f"{picks[layer]}.png"
-            if p.exists():
+            p = WORK / "matched" / f"{picks.get(layer, '')}.png"
+            if layer in picks and p.exists():
                 diffs[layer] = diff_mask(base, load(p))
             else:
                 print(f"없음, 건너뜀: {p.name}")
