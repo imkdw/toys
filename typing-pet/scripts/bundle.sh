@@ -5,6 +5,7 @@
 #   scripts/bundle.sh --make-cert   서명용 자체 서명 인증서를 로그인 키체인에 만든다 (처음 한 번)
 #   scripts/bundle.sh --install     만든 번들을 ~/Applications 에 복사
 #   scripts/bundle.sh --debug       디버그 빌드로 번들 (트레이스 포함, verify.sh --live --bundle 용). target/bundle-debug/
+#   scripts/bundle.sh --universal   Apple Silicon + Intel 둘 다 도는 바이너리로 번들 (다른 맥 배포용, scripts/installer.sh 가 쓴다)
 #
 # 같은 인증서로 계속 서명해야 다시 빌드해도 macOS 가 "입력 모니터링" 권한을 유지한다.
 # (임시 서명(ad-hoc)은 빌드마다 코드 해시가 바뀌어 권한을 다시 요구한다.)
@@ -16,11 +17,13 @@ APP="target/bundle/TypingPet.app"
 make_cert=0
 install=0
 debug=0
+universal=0
 for a in "$@"; do
   case "$a" in
     --make-cert) make_cert=1 ;;
     --install) install=1 ;;
     --debug) debug=1; APP="target/bundle-debug/TypingPet.app" ;;
+    --universal) universal=1 ;;
     *) echo "알 수 없는 인자: $a" >&2; exit 2 ;;
   esac
 done
@@ -51,7 +54,15 @@ EOF
   fi
 fi
 
-if [[ "$debug" == 1 ]]; then
+if [[ "$universal" == 1 ]]; then
+  for t in aarch64-apple-darwin x86_64-apple-darwin; do
+    rustup target list --installed | grep -qx "$t" || rustup target add "$t"
+    cargo build --release --bin typing-pet --target "$t"
+  done
+  mkdir -p target/universal
+  bin="target/universal/typing-pet"
+  lipo -create -output "$bin" target/aarch64-apple-darwin/release/typing-pet target/x86_64-apple-darwin/release/typing-pet
+elif [[ "$debug" == 1 ]]; then
   cargo build --bin typing-pet
   bin="target/debug/typing-pet"
 else
