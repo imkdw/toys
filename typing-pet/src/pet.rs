@@ -143,6 +143,8 @@ pub enum PetEvent {
     PressL,
     /// 오른발이 키/패드를 누름 (자세 포함).
     PressR(PawR),
+    /// 마우스를 움직임 (쓰로틀 후). 손을 슥슥 움직이는 연출에 쓴다.
+    MouseMove,
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +229,7 @@ impl Pet {
             }
             Input::MouseMove => {
                 self.mouse_until = Some(now + ms(self.t.mouse_hold_ms));
+                self.events.push(PetEvent::MouseMove);
             }
             Input::MouseClick => {
                 self.mouse_until = Some(now + ms(self.t.click_ms + self.t.mouse_hold_ms));

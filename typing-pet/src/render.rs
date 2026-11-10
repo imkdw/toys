@@ -16,9 +16,9 @@ use crate::config::Manifest;
 const SHADER: &str = r#"
 struct U {
     xf: vec4<f32>,   // anchor.xy, offset.xy (uv)
-    p: vec4<f32>,    // scale, opacity, mix_t, mode (0 = 레이어 over, 1 = 키 빛, 2 = 마스크 지우기, 3 = 마스크 더하기)
-    g: vec4<f32>,    // 빛 중심.xy, 반경 (uv), _
-    c: vec4<f32>,    // 빛 색 (premultiplied)
+    p: vec4<f32>,    // scale, opacity, mix_t, mode (0 = 레이어 over, 1 = 키 빛, 2 = 마스크 지우기, 3 = 마스크 더하기, 4 = 휘게 over)
+    g: vec4<f32>,    // 빛 중심.xy, 반경 (uv), _ | 휘기: root.xy, tip.xy (uv)
+    c: vec4<f32>,    // 빛 색 (premultiplied) | 휘기: d.xy, 반경 안/밖 (uv)
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(1) @binding(0) var ta: texture_2d<f32>;
@@ -44,12 +44,24 @@ fn vs(@builtin(vertex_index) i: u32) -> VO {
     return o;
 }
 
+// 휘기 세기: root -> tip 축을 따라 0 -> 1, 축에서 멀어지면 0
+fn warp_w(uv: vec2<f32>) -> f32 {
+    let ab = u.g.zw - u.g.xy;
+    let t = dot(uv - u.g.xy, ab) / max(dot(ab, ab), 1e-6);
+    let q = u.g.xy + clamp(t, 0.0, 1.0) * ab;
+    return smoothstep(0.05, 0.85, t) * (1.0 - smoothstep(u.c.z, u.c.w, distance(uv, q)));
+}
+
 @fragment
 fn fs(v: VO) -> @location(0) vec4<f32> {
-    let a = textureSample(ta, smp, v.uv);
-    let b = textureSample(tb, smp, v.uv);
-    let m = textureSample(tm, smp, v.uv).r * u.p.y;
     let mode = u32(u.p.w + 0.5);
+    var suv = v.uv;
+    if (mode == 4u) {
+        suv = v.uv - u.c.xy * warp_w(v.uv);
+    }
+    let a = textureSample(ta, smp, suv);
+    let b = textureSample(tb, smp, suv);
+    let m = textureSample(tm, smp, v.uv).r * u.p.y;
     if (mode == 1u) {
         let x = clamp(distance(v.uv, u.g.xy) / u.g.z, 0.0, 1.0);
         let k = (1.0 - x * x);
@@ -379,6 +391,10 @@ impl Renderer {
         let mut binds: Vec<(u8, wgpu::BindGroup)> = Vec::new();
         for cmd in &frame.cmds {
             let (a, b, t, mode, g) = match &cmd.kind {
+                DrawKind::Layer { name } if cmd.warp.is_some() => {
+                    let w = cmd.warp.as_ref().map(|w| [w.root[0] / c, w.root[1] / c, w.tip[0] / c, w.tip[1] / c]).unwrap_or_default();
+                    (name.as_str(), name.as_str(), 0.0, 4.0, w)
+                }
                 DrawKind::Layer { name } => (name.as_str(), name.as_str(), 0.0, 0.0, [0.0; 4]),
                 DrawKind::Mix { a, b, t } => (a.as_str(), b.as_str(), *t, 0.0, [0.0; 4]),
                 DrawKind::Glow { center, radius, .. } => ("", "", 0.0, 1.0, [center[0] / c, center[1] / c, radius / c, 0.0]),
@@ -388,8 +404,9 @@ impl Renderer {
                 log::warn!("텍스처 없음: {a} / {b} / {m}");
                 continue;
             };
-            let col = match &cmd.kind {
-                DrawKind::Glow { color, .. } => [color[0] * color[3], color[1] * color[3], color[2] * color[3], color[3]],
+            let col = match (&cmd.kind, &cmd.warp) {
+                (DrawKind::Glow { color, .. }, _) => [color[0] * color[3], color[1] * color[3], color[2] * color[3], color[3]],
+                (_, Some(w)) => [w.d[0] / c, w.d[1] / c, w.radius[0] / c, w.radius[1] / c],
                 _ => [0.0; 4],
             };
             let u = |mode: f32| {

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Anim, Manifest};
+use crate::config::{Anim, Manifest, Swing};
 use crate::pet::{Head, PawL, PawR, PetEvent, PetState, Pose};
 
 // ---------- 이징 ----------
@@ -68,11 +68,31 @@ pub struct DrawCmd {
     /// 영역 마스크 레이어. 있으면 마스크 안을 이 레이어로 교체, 없으면 일반 over 합성.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask: Option<String>,
+    /// 휘게 그리기 (마우스 연출). 마스크와 같이 쓰지 않는다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warp: Option<Warp>,
+}
+
+/// root 에서 tip 으로 갈수록, 축에 가까울수록 `d` 만큼 밀어서 그린다 (캔버스 px).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Warp {
+    pub root: [f32; 2],
+    pub tip: [f32; 2],
+    pub radius: [f32; 2],
+    pub d: [f32; 2],
 }
 
 impl DrawCmd {
     fn layer(name: &str) -> Self {
-        Self { kind: DrawKind::Layer { name: name.into() }, opacity: 1.0, offset: [0.0; 2], scale: 1.0, anchor: [0.0; 2], mask: None }
+        Self {
+            kind: DrawKind::Layer { name: name.into() },
+            opacity: 1.0,
+            offset: [0.0; 2],
+            scale: 1.0,
+            anchor: [0.0; 2],
+            mask: None,
+            warp: None,
+        }
     }
     /// 이 명령이 쓰는 레이어 이름들.
     pub fn layers(&self) -> Vec<&str> {
@@ -157,6 +177,8 @@ pub struct Animator {
     tips: BTreeMap<String, [f32; 2]>,
     masks: BTreeMap<String, String>,
     head_anchor: [f32; 2],
+    /// 마우스 연출 축. 레이어(paw_r/mouse_bg, fx/mouse_arm)가 없으면 None.
+    swing: Option<Swing>,
     /// 캔버스 px / 표시 pt.
     px_per_pt: f32,
     pub breathing: bool,
@@ -165,8 +187,9 @@ pub struct Animator {
     head_fade: Option<HeadFade>,
     dizzy_since: Instant,
     pop_start: Option<Instant>,
-    press_l: Option<Instant>,
-    press_r: Option<Instant>,
+    /// 마우스 흔들기 시작 시각과 마지막 마우스 이동 시각.
+    swing_start: Option<Instant>,
+    last_move: Option<Instant>,
     glows: Vec<Glow>,
     /// 선글라스 낙하 시작 (머리가 Sunglasses 로 바뀐 시각).
     sun_drop: Option<Instant>,
@@ -184,14 +207,15 @@ impl Animator {
             tips: m.tips.clone(),
             masks: m.masks.iter().filter(|(_, v)| m.layers.contains(v)).map(|(k, v)| (k.clone(), v.clone())).collect(),
             head_anchor: m.head_anchor,
+            swing: m.swing.clone().filter(|_| ["paw_r/mouse_bg", "fx/mouse_arm"].iter().all(|l| m.layers.iter().any(|x| x == l))),
             px_per_pt: m.canvas as f32 / size_pt,
             breathing: false,
             state: PetState::default(),
             head_fade: None,
             dizzy_since: now,
             pop_start: None,
-            press_l: None,
-            press_r: None,
+            swing_start: None,
+            last_move: None,
             glows: Vec::new(),
             sun_drop: None,
             sun_prev_head: "head/normal".into(),
@@ -252,17 +276,31 @@ impl Animator {
         }
         for ev in events {
             match ev {
-                PetEvent::PressL => {
-                    self.press_l = Some(now);
-                    self.add_glow(PawL::Down.layer(), now);
-                }
-                PetEvent::PressR(pose) => {
-                    self.press_r = Some(now);
-                    self.add_glow(pose.layer(), now);
+                PetEvent::PressL => self.add_glow(PawL::Down.layer(), now),
+                PetEvent::PressR(pose) => self.add_glow(pose.layer(), now),
+                PetEvent::MouseMove => {
+                    if self.swing_env(now) <= 0.0 {
+                        self.swing_start = Some(now);
+                    }
+                    self.last_move = Some(now);
                 }
             }
         }
         self.state = state;
+    }
+
+    /// 마우스 흔들기 세기 0~1: 시작할 때 swing_fade_ms 동안 커지고, 마지막 이동 뒤 swing_hold_ms 가 지나면 줄어든다.
+    fn swing_env(&self, now: Instant) -> f32 {
+        let (Some(start), Some(last)) = (self.swing_start, self.last_move) else { return 0.0 };
+        let a = &self.a;
+        let fade_in = ease_in_out(progress(now, start, a.swing_fade_ms));
+        let stop = last + Duration::from_millis(a.swing_hold_ms);
+        let fade_out = if now <= stop { 1.0 } else { 1.0 - ease_in_out(progress(now, stop, a.swing_fade_ms)) };
+        fade_in * fade_out
+    }
+
+    fn swing_active(&self, now: Instant) -> bool {
+        self.swing.is_some() && self.state.paw_r == PawR::Mouse && self.swing_env(now) > 0.0
     }
 
     fn add_glow(&mut self, pose_layer: &str, now: Instant) {
@@ -291,25 +329,33 @@ impl Animator {
         let mut cmds = Vec::new();
         if full_alpha < 1.0 {
             cmds.push(DrawCmd::layer("base"));
-            // 앞발
-            let press = |start: Option<Instant>| -> f32 {
-                start.map(|s| progress(now, s, a.press_ms)).filter(|p| *p < 1.0).map(bump).unwrap_or(0.0) * a.press_pt * pt
-            };
+            // 앞발. 책상이 같이 움직이지 않도록 앞발 레이어는 제자리에 그린다
             if let Some(l) = self.layers.resolve(st.paw_l.layer()) {
                 let mut c = DrawCmd::layer(&l);
                 c.mask = self.masks.get("paw_l").cloned();
-                if st.paw_l == PawL::Down {
-                    c.offset = [0.0, press(self.press_l)];
-                }
                 cmds.push(c);
             }
-            if let Some(l) = self.layers.resolve(st.paw_r.layer()) {
-                let mut c = DrawCmd::layer(&l);
-                c.mask = self.masks.get("paw_r").cloned();
-                if matches!(st.paw_r, PawR::Down | PawR::Center | PawR::MouseClick) {
-                    c.offset = [0.0, press(self.press_r)];
+            match (&self.swing, st.paw_r) {
+                (Some(sw), PawR::Mouse) => {
+                    // 팔을 치운 바탕 위에 팔을 휘게 그린다 (멈춰 있으면 d = 0 이라 원래 그림과 같다)
+                    let mut bg = DrawCmd::layer("paw_r/mouse_bg");
+                    bg.mask = self.masks.get("paw_r").cloned();
+                    cmds.push(bg);
+                    let e = self.swing_env(now);
+                    let t = self.swing_start.map_or(0.0, |s| now.saturating_duration_since(s).as_secs_f32());
+                    let ph = t * a.swing_hz * std::f32::consts::TAU;
+                    let d = [ph.sin() * a.swing_pt[0] * pt * e, (2.0 * ph).sin() * a.swing_pt[1] * pt * e];
+                    let mut arm = DrawCmd::layer("fx/mouse_arm");
+                    arm.warp = Some(Warp { root: sw.root, tip: sw.tip, radius: sw.radius, d });
+                    cmds.push(arm);
                 }
-                cmds.push(c);
+                _ => {
+                    if let Some(l) = self.layers.resolve(st.paw_r.layer()) {
+                        let mut c = DrawCmd::layer(&l);
+                        c.mask = self.masks.get("paw_r").cloned();
+                        cmds.push(c);
+                    }
+                }
             }
             // 키 빛
             for g in &self.glows {
@@ -322,6 +368,7 @@ impl Animator {
                     scale: 1.0,
                     anchor: g.center,
                     mask: None,
+                    warp: None,
                 });
             }
             // 머리
@@ -368,7 +415,7 @@ impl Animator {
             };
             if let Some(kind) = head_kind {
                 let mask = self.masks.get("head").cloned();
-                cmds.push(DrawCmd { kind, opacity: 1.0, offset: [0.0, breathe], scale, anchor: self.head_anchor, mask });
+                cmds.push(DrawCmd { kind, opacity: 1.0, offset: [0.0, breathe], scale, anchor: self.head_anchor, mask, warp: None });
             }
             if let Some(mut f) = fx {
                 f.offset[1] += breathe;
@@ -386,12 +433,11 @@ impl Animator {
         Frame { cmds }
     }
 
-    /// 머리/앞발/키 빛 연출이 진행 중이라 매 프레임(vsync) 그려야 하는가.
+    /// 머리/마우스/키 빛 연출이 진행 중이라 매 프레임(vsync) 그려야 하는가.
     pub fn animating(&self, now: Instant) -> bool {
         let a = &self.a;
         let live = |s: Option<Instant>, d: u64| s.is_some_and(|s| progress(now, s, d) < 1.0);
-        live(self.press_l, a.press_ms)
-            || live(self.press_r, a.press_ms)
+        self.swing_active(now)
             || live(self.pop_start, a.pop_ms)
             || self.head_fade.as_ref().is_some_and(|f| progress(now, f.start, a.head_fade_ms) < 1.0)
             || self.pose_fade.as_ref().is_some_and(|f| progress(now, f.1, a.pose_fade_ms) < 1.0)

@@ -78,6 +78,9 @@ pub struct Manifest {
     /// 마스크가 있는 레이어는 "마스크 안은 이 레이어로 교체" 로 그린다 (base 의 귀를 지울 수 있게).
     #[serde(default)]
     pub masks: BTreeMap<String, String>,
+    /// 마우스 연출 축. 없으면 마우스 자세는 한 장으로 가만히 있다.
+    #[serde(default)]
+    pub swing: Option<Swing>,
     #[serde(default)]
     pub timing: Timing,
     #[serde(default)]
@@ -87,6 +90,24 @@ pub struct Manifest {
 
     #[serde(skip)]
     pub dir: PathBuf,
+}
+
+/// 마우스를 움직이는 동안 fx/mouse_arm 을 휘게 그리는 축 (캔버스 px).
+/// root(어깨) 에서는 안 움직이고 tip(손끝) 쪽으로 갈수록 크게 움직인다.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Swing {
+    pub root: [f32; 2],
+    pub tip: [f32; 2],
+    /// 축에서 이 거리까지는 다 움직이고, `radius[1]` 밖은 안 움직인다.
+    #[serde(default = "Swing::default_radius")]
+    pub radius: [f32; 2],
+}
+
+impl Swing {
+    fn default_radius() -> [f32; 2] {
+        [45.0, 95.0]
+    }
 }
 
 /// 상태 머신 타이밍 (PLAN 5.3).
@@ -139,8 +160,6 @@ pub struct Anim {
     pub head_fade_ms: u64,
     pub pop_ms: u64,
     pub pop_scale: f32,
-    pub press_ms: u64,
-    pub press_pt: f32,
     pub glow_ms: u64,
     pub glow_r0_pt: f32,
     pub glow_r1_pt: f32,
@@ -153,6 +172,12 @@ pub struct Anim {
     pub breathe_period_s: f32,
     pub breathe_pt: f32,
     pub breathe_fps: f32,
+    /// 마우스 연출: 손끝 흔들림 폭 (pt, 가로/세로), 초당 왕복 수.
+    pub swing_pt: [f32; 2],
+    pub swing_hz: f32,
+    /// 마지막 마우스 이동 뒤 이만큼은 계속 흔들고, 이후 `swing_fade_ms` 동안 멈춘다.
+    pub swing_hold_ms: u64,
+    pub swing_fade_ms: u64,
 }
 
 impl Default for Anim {
@@ -161,8 +186,6 @@ impl Default for Anim {
             head_fade_ms: 250,
             pop_ms: 200,
             pop_scale: 1.04,
-            press_ms: 80,
-            press_pt: 2.0,
             glow_ms: 220,
             glow_r0_pt: 10.0,
             glow_r1_pt: 16.0,
@@ -174,6 +197,10 @@ impl Default for Anim {
             breathe_period_s: 3.0,
             breathe_pt: 1.5,
             breathe_fps: 30.0,
+            swing_pt: [4.0, 1.2],
+            swing_hz: 3.5,
+            swing_hold_ms: 200,
+            swing_fade_ms: 150,
         }
     }
 }
