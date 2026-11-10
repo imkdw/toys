@@ -395,6 +395,11 @@ impl App {
                 }
                 self.save();
             }
+            TrayAction::Character(i) => {
+                if let Some(name) = self.tray.as_ref().and_then(|t| t.character(i)).map(str::to_string) {
+                    self.switch_character(&name);
+                }
+            }
             TrayAction::ToggleLoginItem => {
                 if let Err(e) = mac::set_login_item(!mac::login_item_enabled()) {
                     log::warn!("로그인 항목 변경 실패: {e}");
@@ -409,6 +414,45 @@ impl App {
         if let Some(t) = &self.tray {
             t.sync(&self.cfg);
         }
+    }
+
+    /// 지금 캐릭터의 폴더 이름 (manifest 의 name 이 아니라 characters/ 아래 폴더).
+    fn manifest_folder(&self) -> String {
+        self.manifest.dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    }
+
+    /// 다른 캐릭터로 바꾼다. 상태 머신/연출은 새로 시작하고 창 위치/크기는 그대로 둔다.
+    fn switch_character(&mut self, name: &str) {
+        if name == self.manifest_folder() {
+            return;
+        }
+        let m = match Manifest::load(Some(name)) {
+            Ok(m) => m,
+            Err(e) => {
+                log::warn!("캐릭터 {name} 로딩 실패: {e}");
+                if let Some(t) = &self.tray {
+                    t.set_character(&self.manifest_folder());
+                }
+                return;
+            }
+        };
+        let now = Instant::now();
+        if let Some(g) = &mut self.gpu {
+            let layers = render::load_layers(&m);
+            g.hit = HitMap::new(&layers, 128);
+            g.renderer.set_layers(layers, m.canvas);
+        }
+        self.pet = Pet::new(m.timing.clone(), m.keys.clone(), now);
+        self.anim = Animator::new(&m, self.cfg.size as f32, now);
+        self.anim.breathing = self.cfg.breathing;
+        log::info!("캐릭터 {} ({}), 레이어 {}개", m.name, m.dir.display(), m.layers.len());
+        self.manifest = m;
+        self.cfg.character = Some(name.to_string());
+        if let Some(t) = &self.tray {
+            t.set_character(name);
+        }
+        self.save();
+        self.request_redraw();
     }
 
     fn save(&self) {
@@ -438,7 +482,8 @@ impl ApplicationHandler<AppEvent> for App {
     fn new_events(&mut self, el: &ActiveEventLoop, cause: StartCause) {
         if matches!(cause, StartCause::Init) {
             let proxy = self.proxy.clone();
-            match Tray::new(&self.cfg, move |a| {
+            let chars = Manifest::available();
+            match Tray::new(&self.cfg, &chars, &self.manifest_folder(), move |a| {
                 let _ = proxy.send_event(AppEvent::Tray(a));
             }) {
                 Ok(t) => self.tray = Some(t),
@@ -630,10 +675,16 @@ fn main() {
 
     trace::init(Instant::now());
     let cfg = Config::load();
-    let manifest = Manifest::load(cfg.character.as_deref()).unwrap_or_else(|e| {
-        eprintln!("manifest 로딩 실패: {e}");
-        std::process::exit(1);
-    });
+    // 설정의 캐릭터 폴더가 없어졌으면 기본 캐릭터로
+    let manifest = Manifest::load(cfg.character.as_deref())
+        .or_else(|e| {
+            log::warn!("캐릭터 {:?} 로딩 실패, 기본 캐릭터 사용: {e}", cfg.character);
+            Manifest::load(None)
+        })
+        .unwrap_or_else(|e| {
+            eprintln!("manifest 로딩 실패: {e}");
+            std::process::exit(1);
+        });
     log::info!("캐릭터 {} ({}), 레이어 {}개", manifest.name, manifest.dir.display(), manifest.layers.len());
 
     let event_loop = EventLoop::<AppEvent>::with_user_event()

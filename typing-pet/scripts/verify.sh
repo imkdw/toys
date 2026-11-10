@@ -6,7 +6,7 @@
 #   scripts/verify.sh --live --bundle     --live 를 .app 번들(디버그, 같은 인증서 서명) 실행 상태로
 #   scripts/verify.sh --update-baseline   기준 이미지를 지금 렌더 결과로 갱신 (사람이 시트를 확인한 뒤에만)
 #
-# 환경 변수: CHARACTER(기본: usagi 가 있으면 usagi, 없으면 _test), BURST_SECS(기본 180), IDLE_SECS(기본 30)
+# 환경 변수: CHARACTER(--live 에서 띄울 캐릭터. 기본: usagi 가 있으면 usagi, 없으면 _test), BURST_SECS(기본 180), IDLE_SECS(기본 30)
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -51,6 +51,12 @@ fi
 
 # ---------- 3층: 오프스크린 조합 시트 + 기준 이미지 ----------
 chars=("_test")
+# 실제 캐릭터: characters/ 아래 manifest.toml 이 있고 _ 로 시작하지 않는 폴더 전부 (usagi 를 맨 뒤에 두어 --live 기본값으로)
+for d in characters/*/; do
+  c="$(basename "$d")"
+  [[ "$c" == _* || "$c" == usagi || ! -f "$d/manifest.toml" ]] && continue
+  chars+=("$c")
+done
 if [[ -f characters/usagi/manifest.toml ]]; then chars+=("usagi"); fi
 for c in "${chars[@]}"; do
   dir="$OUT/combos/$c"

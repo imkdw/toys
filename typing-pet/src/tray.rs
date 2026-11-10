@@ -11,6 +11,8 @@ pub enum TrayAction {
     ToggleVisible,
     ToggleBreathing,
     Size(f64),
+    /// `Tray::characters` 의 순번.
+    Character(usize),
     ToggleLoginItem,
     OpenPermissionSettings,
     Quit,
@@ -23,6 +25,8 @@ pub struct Tray {
     breathing: CheckMenuItem,
     login: CheckMenuItem,
     sizes: Vec<(f64, CheckMenuItem)>,
+    /// (폴더 이름, 메뉴 항목)
+    characters: Vec<(String, CheckMenuItem)>,
     warning: MenuItem,
     warning_shown: bool,
     ids: Vec<(tray_icon::menu::MenuId, TrayAction)>,
@@ -57,8 +61,21 @@ fn icon() -> Icon {
 }
 
 impl Tray {
-    pub fn new(cfg: &Config, send: impl Fn(TrayAction) + Send + Sync + 'static) -> Result<Self, String> {
+    /// `characters`: (폴더 이름, 메뉴 이름) 목록, `current`: 지금 캐릭터 폴더 이름.
+    pub fn new(
+        cfg: &Config,
+        characters: &[(String, String)],
+        current: &str,
+        send: impl Fn(TrayAction) + Send + Sync + 'static,
+    ) -> Result<Self, String> {
         let menu = Menu::new();
+        let char_menu = Submenu::new("캐릭터", characters.len() > 1);
+        let mut chars = Vec::new();
+        for (name, title) in characters {
+            let item = CheckMenuItem::new(title, true, name == current, None);
+            char_menu.append(&item).map_err(|e| e.to_string())?;
+            chars.push((name.clone(), item));
+        }
         let visible = CheckMenuItem::new("보이기", true, cfg.visible, None);
         let breathing = CheckMenuItem::new("숨쉬기", true, cfg.breathing, None);
         let size_menu = Submenu::new("크기", true);
@@ -71,7 +88,7 @@ impl Tray {
         let login = CheckMenuItem::new("로그인 시 자동 실행", crate::mac::bundle_path().is_some(), crate::mac::login_item_enabled(), None);
         let warning = MenuItem::new("⚠ 입력 모니터링 권한 필요 (설정 열기)", true, None);
         let quit = MenuItem::new("종료", true, None);
-        menu.append_items(&[&visible, &breathing, &size_menu, &login, &PredefinedMenuItem::separator(), &quit])
+        menu.append_items(&[&char_menu, &visible, &breathing, &size_menu, &login, &PredefinedMenuItem::separator(), &quit])
             .map_err(|e| e.to_string())?;
 
         let mut ids = vec![
@@ -83,6 +100,9 @@ impl Tray {
         ];
         for (s, item) in &sizes {
             ids.push((item.id().clone(), TrayAction::Size(*s)));
+        }
+        for (i, (_, item)) in chars.iter().enumerate() {
+            ids.push((item.id().clone(), TrayAction::Character(i)));
         }
         let map = ids.clone();
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
@@ -97,7 +117,19 @@ impl Tray {
             .with_tooltip("typing-pet")
             .build()
             .map_err(|e| e.to_string())?;
-        Ok(Self { _icon: icon, menu, visible, breathing, login, sizes, warning, warning_shown: false, ids })
+        Ok(Self { _icon: icon, menu, visible, breathing, login, sizes, characters: chars, warning, warning_shown: false, ids })
+    }
+
+    /// 순번 -> 캐릭터 폴더 이름.
+    pub fn character(&self, i: usize) -> Option<&str> {
+        self.characters.get(i).map(|(n, _)| n.as_str())
+    }
+
+    /// 체크 표시를 지금 캐릭터에 맞춘다 (바꾸기 실패하면 이전 캐릭터로 되돌리는 데도 쓴다).
+    pub fn set_character(&self, current: &str) {
+        for (n, item) in &self.characters {
+            item.set_checked(n == current);
+        }
     }
 
     pub fn sync(&self, cfg: &Config) {

@@ -67,6 +67,9 @@ impl Config {
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub name: String,
+    /// 메뉴에 보일 이름 (예: "우사기"). 없으면 폴더 이름.
+    #[serde(default)]
+    pub title: Option<String>,
     /// 캔버스 크기 (px). 모든 레이어가 이 크기의 정사각형이어야 한다.
     pub canvas: u32,
     /// layers/ 아래 PNG 이름 (확장자 제외). 예: "base", "head/normal", "paw_r/center".
@@ -376,19 +379,48 @@ impl Manifest {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("characters")
     }
 
-    /// name 이 None 이면 characters/ 아래 이름순 첫 번째 폴더 (`_` 로 시작하는 테스트 폴더 제외).
+    /// 고를 수 있는 캐릭터 (폴더 이름, 메뉴 이름) 목록. manifest.toml 이 있고 `_` 로 시작하지 않는 폴더, 메뉴 이름순.
+    pub fn available() -> Vec<(String, String)> {
+        Self::available_in(&Self::characters_dir())
+    }
+
+    pub fn available_in(root: &Path) -> Vec<(String, String)> {
+        let Ok(rd) = std::fs::read_dir(root) else { return Vec::new() };
+        let mut v: Vec<(String, String)> = rd
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.join("manifest.toml").is_file())
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .filter(|n| !n.starts_with('_'))
+            .map(|n| {
+                // 메뉴 이름만 필요하므로 title 줄만 가볍게 읽는다 (깨진 manifest 도 목록에는 보이게)
+                #[derive(Deserialize)]
+                struct Head {
+                    title: Option<String>,
+                }
+                let title = std::fs::read_to_string(root.join(&n).join("manifest.toml"))
+                    .ok()
+                    .and_then(|t| toml::from_str::<toml::Table>(&t).ok())
+                    .and_then(|t| t.try_into::<Head>().ok())
+                    .and_then(|h| h.title)
+                    .unwrap_or_else(|| n.clone());
+                (n, title)
+            })
+            .collect();
+        v.sort_by(|a, b| (&a.1, &a.0).cmp(&(&b.1, &b.0)));
+        v
+    }
+
+    /// name 이 None 이면 `available()` 의 첫 번째 (메뉴 이름순, `_` 로 시작하는 테스트 폴더 제외).
     pub fn load(name: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
         let root = Self::characters_dir();
         let dir = match name {
             Some(name) => root.join(name),
             None => {
-                let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)?
-                    .filter_map(|e| e.ok().map(|e| e.path()))
-                    .filter(|p| p.join("manifest.toml").is_file())
-                    .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('_')))
-                    .collect();
-                dirs.sort();
-                dirs.into_iter().next().ok_or("characters/ 아래에 manifest.toml 이 있는 폴더가 없음")?
+                let (first, _) = Self::available_in(&root)
+                    .into_iter()
+                    .next()
+                    .ok_or("characters/ 아래에 manifest.toml 이 있는 폴더가 없음")?;
+                root.join(first)
             }
         };
         Self::load_dir(&dir)

@@ -377,6 +377,17 @@ impl Renderer {
         v
     }
 
+    /// 다른 캐릭터로 바꿀 때: 원본 레이어를 갈아 끼우고 지금 표시 크기로 텍스처를 다시 만든다.
+    pub fn set_layers(&mut self, src: HashMap<String, Arc<SrcImage>>, canvas: u32) {
+        let size = self.tex_size;
+        self.src = src;
+        self.canvas = canvas;
+        self.tex.clear();
+        self.bind_cache.clear();
+        self.tex_size = 0;
+        self.prepare(size);
+    }
+
     /// 표시 픽셀 크기에 맞춰 텍스처를 (다시) 만든다. 같은 크기면 아무것도 안 한다.
     pub fn prepare(&mut self, size_px: u32) {
         if size_px == self.tex_size || size_px == 0 {
