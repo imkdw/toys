@@ -456,6 +456,48 @@ fn run_burst(c: &Ctx, r: &mut Report) {
     }
 }
 
+/// 시연용 시나리오 (검사 없음): 빠른 타이핑 -> 과열 -> 멈춤(제스처) -> 마우스 -> 10연타 선글라스 -> 천천히 타이핑.
+fn run_demo(c: &Ctx, _r: &mut Report) {
+    let letters: [u16; 14] = [0, 37, 1, 38, 2, 40, 3, 32, 13, 34, 14, 31, 4, 46];
+    let (x, y, w, h) = c.win;
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    let typing = |secs: f64, gap_ms: u64, start: usize| {
+        let end = Instant::now() + Duration::from_secs_f64(secs);
+        let mut i = start;
+        while Instant::now() < end {
+            let k = letters[i % letters.len()];
+            key(k, true, false);
+            sleep_ms(12);
+            key(k, false, false);
+            i += 1;
+            sleep_ms(gap_ms.saturating_sub(12) + (i as u64 * 7) % 25);
+        }
+    };
+    sleep_ms(1500);
+    typing(9.0, 75, 0); // 빠르게: 신남 -> 빙글 안경 -> 과열
+    sleep_ms(6500); // 멈추면 식으면서 제스처
+    for i in 0..30 {
+        let a = i as f64 / 30.0 * std::f64::consts::TAU;
+        mouse(5, cx + a.cos() * w * 0.3, cy + a.sin() * h * 0.3, 0);
+        sleep_ms(60);
+        if i == 12 || i == 24 {
+            mouse(1, cx, cy, 0);
+            sleep_ms(40);
+            mouse(2, cx, cy, 0);
+        }
+    }
+    sleep_ms(1500);
+    for _ in 0..10 {
+        key(17, true, false); // T 10연타 -> 선글라스
+        sleep_ms(15);
+        key(17, false, false);
+        sleep_ms(110);
+    }
+    sleep_ms(1500);
+    typing(5.0, 180, 3); // 선글라스 쓴 채 천천히
+    sleep_ms(1500);
+}
+
 // ---------- 창 + 실행 ----------
 
 #[derive(Debug)]
@@ -544,6 +586,7 @@ fn run(cmd: &str, args: &[String], win: (f64, f64, f64, f64)) -> i32 {
         "repeat" => run_repeat(&c, &mut r),
         "mouse" => run_mouse(&c, &mut r),
         "burst" => run_burst(&c, &mut r),
+        "demo" => run_demo(&c, &mut r),
         _ => {
             eprintln!("알 수 없는 명령: {cmd}");
             return 2;
