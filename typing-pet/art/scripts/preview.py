@@ -77,7 +77,7 @@ def main() -> None:
     summary = json.loads((tl / "timeline.json").read_text())
     heads = []
     for s in summary:
-        h = s["state"]["head"] + ("+gesture" if s["state"]["pose"] else "")
+        h = s["state"]["head"] + (f"+{s['state']['pose']}" if s["state"]["pose"] else "")
         if not heads or heads[-1][1] != h:
             heads.append((s["ms"], h))
     print("머리 변화:", " -> ".join(f"{ms / 1000:.1f}s {h}" for ms, h in heads))

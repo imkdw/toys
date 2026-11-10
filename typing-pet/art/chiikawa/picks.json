@@ -1,0 +1,37 @@
+{
+  "_comment": "레이어 이름 -> art/chiikawa/raw 의 생성 파일 (확장자 제외). 재생성 후 고른 후보를 여기서 바꾼다.",
+  "_title": "치이카와",
+  "base": "base_final",
+  "paw_l/down": "left_down_2",
+  "paw_r/down": "right_down_1",
+  "paw_r/center": "right_center_1",
+  "paw_r/mouse": "mouse_2",
+  "paw_r/mouse_click": "mouse_click_1",
+  "head/excited": "head_excited_2",
+  "head/dizzy": "head_dizzy_1",
+  "head/overheat": "head_overheat_1",
+  "head/sleepy": "head_ears_down_1",
+  "head/sunglasses": "head_sunglasses_1",
+  "full/gesture": "gesture_1",
+  "_scenes": {
+    "broccoli": {
+      "trigger": "idle",
+      "frame_ms": 500
+    },
+    "license": {
+      "trigger": "milestone",
+      "frame_ms": 400
+    },
+    "cry": {
+      "trigger": "gesture",
+      "frame_ms": 400,
+      "duration_ms": 3000
+    }
+  },
+  "full/broccoli_a": "scene_broccoli_a_1",
+  "full/broccoli_b": "scene_broccoli_b_1",
+  "full/license_a": "scene_license_a_1",
+  "full/license_b": "scene_license_b_2",
+  "full/cry_a": "scene_cry_a_1",
+  "full/cry_b": "scene_cry_b_1"
+}

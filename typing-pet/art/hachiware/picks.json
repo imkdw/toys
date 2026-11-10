@@ -1,0 +1,37 @@
+{
+  "_comment": "레이어 이름 -> art/hachiware/raw 의 생성 파일 (확장자 제외). 재생성 후 고른 후보를 여기서 바꾼다.",
+  "_title": "하치와레",
+  "base": "base_final",
+  "paw_l/down": "left_down_1",
+  "paw_r/down": "right_down_1",
+  "paw_r/center": "right_center_1",
+  "paw_r/mouse": "mouse_2",
+  "paw_r/mouse_click": "mouse_click_1",
+  "head/excited": "head_excited_2",
+  "head/dizzy": "head_dizzy_1",
+  "head/overheat": "head_overheat_1",
+  "head/sleepy": "head_ears_down_1",
+  "head/sunglasses": "head_sunglasses_1",
+  "full/gesture": "gesture_1",
+  "_scenes": {
+    "book": {
+      "trigger": "idle",
+      "frame_ms": 700
+    },
+    "camera": {
+      "trigger": "milestone",
+      "frame_ms": 350
+    },
+    "guitar": {
+      "trigger": "gesture",
+      "frame_ms": 350,
+      "duration_ms": 3000
+    }
+  },
+  "full/book_a": "scene_book_a_2",
+  "full/book_b": "scene_book_b_1",
+  "full/camera_a": "scene_camera_a_1",
+  "full/camera_b": "scene_camera_b_1",
+  "full/guitar_a": "scene_guitar_a_1",
+  "full/guitar_b": "scene_guitar_b_1"
+}

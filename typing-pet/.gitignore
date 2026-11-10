@@ -5,10 +5,10 @@
 /characters/*
 !/characters/README.md
 !/characters/_test/
-/art/ref/
-/art/raw/
-/art/prompts/
-/art/masks/
+/art/*/ref/
+/art/*/raw/
+/art/*/prompts/
+/art/*/masks/
 /art/.venv/
 __pycache__/
-/art/work/
+/art/*/work/

@@ -9,7 +9,9 @@ PLAN 은 마스크를 손으로 칠하게 되어 있지만, 먼저 차이 영역
 - sunglasses 는 선글라스 변형의 차이 영역 중 어두운 픽셀만.
 - 발끝 좌표(키 빛 위치)와 머리 기준점을 art/work/geometry.json 에 남긴다.
 
-사용법: automask.py [--force]
+사용법: automask.py [--name usagi] [--force]
+
+캐릭터별 폴더 art/<이름>/ 의 work/, masks/, picks.json 을 쓴다.
 """
 
 import argparse
@@ -21,8 +23,8 @@ import numpy as np
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
-WORK = ROOT / "art/work"
-MASKS = ROOT / "art/masks"
+WORK = ROOT / "art/usagi/work"
+MASKS = ROOT / "art/usagi/masks"
 
 GROUPS = {
     "paw_l": ["paw_l/down"],
@@ -79,9 +81,12 @@ def tip(diff: np.ndarray) -> list[float]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--name", default="usagi")
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
-    picks = json.loads((ROOT / "art/picks.json").read_text())
+    global WORK, MASKS
+    WORK, MASKS = ROOT / "art" / a.name / "work", ROOT / "art" / a.name / "masks"
+    picks = json.loads((ROOT / "art" / a.name / "picks.json").read_text())
     base = load(WORK / "base.png")
     MASKS.mkdir(parents=True, exist_ok=True)
 
