@@ -41,10 +41,16 @@ pub enum Head {
     Sunglasses,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// 전체 프레임 연출 (애니 장면). 이름은 발동 조건이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Pose {
+    /// 과열이 식을 때.
     Gesture,
+    /// 한동안 입력이 없을 때 (입력이 오면 바로 끝).
+    Idle,
+    /// 키를 `milestone_keys` 번 칠 때마다.
+    Milestone,
 }
 
 /// 활동 점수 단계.
@@ -123,6 +129,8 @@ impl Pose {
     pub fn layer(self) -> &'static str {
         match self {
             Pose::Gesture => "full/gesture",
+            Pose::Idle => "full/idle",
+            Pose::Milestone => "full/milestone",
         }
     }
 }
@@ -163,6 +171,13 @@ pub struct Pet {
     gesture_until: Option<Instant>,
     gesture_ready_at: Option<Instant>,
     sun_until: Option<Instant>,
+    /// idle 장면 끝 시각과, 이번 쉬는 동안 이미 했는지.
+    idle_until: Option<Instant>,
+    idle_done: bool,
+    /// idle_scene_ms = 0: 입력이 올 때까지 idle 장면.
+    idle_hold: bool,
+    milestone_until: Option<Instant>,
+    keys_typed: u64,
     egg_key: Option<u16>,
     egg_count: u32,
     events: Vec<PetEvent>,
@@ -188,6 +203,11 @@ impl Pet {
             gesture_until: None,
             gesture_ready_at: None,
             sun_until: None,
+            idle_until: None,
+            idle_done: false,
+            idle_hold: false,
+            milestone_until: None,
+            keys_typed: 0,
             egg_key: None,
             egg_count: 0,
             events: Vec::new(),
@@ -211,8 +231,16 @@ impl Pet {
     pub fn on_input(&mut self, input: Input, now: Instant) {
         self.advance(now);
         self.last_input = now;
+        self.idle_until = None;
+        self.idle_done = false;
+        self.idle_hold = false;
         match input {
             Input::Key(code) => {
+                self.keys_typed += 1;
+                let mk = self.t.milestone_keys;
+                if mk > 0 && self.keys_typed % mk == 0 && self.gesture_until.is_none() {
+                    self.milestone_until = Some(now + ms(self.t.milestone_ms));
+                }
                 self.score = self.score(now) + 1.0;
                 self.score_at = now;
                 self.easter_egg(code, now);
@@ -278,6 +306,23 @@ impl Pet {
         if self.sun_until.is_some_and(|t| t <= now) {
             self.sun_until = None;
         }
+        if self.milestone_until.is_some_and(|t| t <= now) {
+            self.milestone_until = None;
+        }
+        if self.idle_until.is_some_and(|t| t <= now) {
+            self.idle_until = None;
+        }
+        if let Some(start) = self.idle_start() {
+            if now >= start {
+                self.idle_done = true;
+                if self.t.idle_scene_ms == 0 {
+                    self.idle_hold = true;
+                } else {
+                    let end = start + ms(self.t.idle_scene_ms);
+                    self.idle_until = (end > now).then_some(end);
+                }
+            }
+        }
         // 단계는 한 번에 한 칸, 최소 유지 시간이 지나야 바뀐다.
         let dwell = ms(self.t.min_dwell_ms);
         if now.saturating_duration_since(self.level_since) >= dwell {
@@ -296,6 +341,11 @@ impl Pet {
                 }
             }
         }
+    }
+
+    /// 아직 안 한 idle 장면이 시작할 시각.
+    fn idle_start(&self) -> Option<Instant> {
+        (self.t.idle_scene_s > 0 && !self.idle_done).then(|| self.last_input + Duration::from_secs(self.t.idle_scene_s))
     }
 
     pub fn is_sleepy(&self, now: Instant) -> bool {
@@ -317,7 +367,16 @@ impl Pet {
         } else {
             self.level.head()
         };
-        let pose = self.gesture_until.filter(|t| *t > now).map(|_| Pose::Gesture);
+        let live = |t: Option<Instant>| t.is_some_and(|t| t > now);
+        let pose = if live(self.gesture_until) {
+            Some(Pose::Gesture)
+        } else if live(self.milestone_until) {
+            Some(Pose::Milestone)
+        } else if live(self.idle_until) || self.idle_hold {
+            Some(Pose::Idle)
+        } else {
+            None
+        };
         PetState { paw_l, paw_r, head, pose }
     }
 
@@ -327,7 +386,7 @@ impl Pet {
 
     /// 다음에 상태가 바뀔 수 있는 시각. 없으면 None. 항상 now 보다 미래.
     pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
-        let mut cands: Vec<Instant> = [self.l_until, self.r_act.map(|r| r.1), self.mouse_until, self.gesture_until, self.sun_until]
+        let mut cands: Vec<Instant> = [self.l_until, self.r_act.map(|r| r.1), self.mouse_until, self.gesture_until, self.sun_until, self.milestone_until, self.idle_until, self.idle_start()]
             .into_iter()
             .flatten()
             .collect();

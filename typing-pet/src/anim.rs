@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Anim, Manifest, Swing};
+use crate::config::{Anim, Breathe, FxKind, Manifest, Scene, SceneFx, Step, Swing};
 use crate::pet::{Head, PawL, PawR, PetEvent, PetState, Pose};
 
 // ---------- 이징 ----------
@@ -169,6 +169,91 @@ struct Glow {
     start: Instant,
 }
 
+/// 지금 재생 중인 전체 프레임 연출 (장면 단계 반복, 또는 한 장).
+#[derive(Debug, Clone)]
+struct Full {
+    steps: Vec<Step>,
+    cycle: u64,
+    start: Instant,
+    breathe: Option<Breathe>,
+    fx: Vec<SceneFx>,
+}
+
+fn fract(x: f32) -> f32 {
+    x - x.floor()
+}
+
+impl Full {
+    fn new(steps: Vec<Step>, start: Instant) -> Self {
+        let cycle = steps.iter().map(|s| s.ms.max(1)).sum::<u64>().max(1);
+        Self { steps, cycle, start, breathe: None, fx: Vec::new() }
+    }
+    fn el_ms(&self, now: Instant) -> u64 {
+        now.saturating_duration_since(self.start).as_millis() as u64
+    }
+    /// (지금 단계, 다음 단계로 블렌드 진행 0~1, 지금 단계 안에서 지난 ms).
+    fn pos(&self, now: Instant) -> (usize, f32, u64) {
+        let mut t = self.el_ms(now) % self.cycle;
+        for (i, s) in self.steps.iter().enumerate() {
+            let ms = s.ms.max(1);
+            if t < ms {
+                let b = if s.blend_ms > 0 && t + s.blend_ms > ms {
+                    ease_in_out((t + s.blend_ms - ms) as f32 / s.blend_ms as f32)
+                } else {
+                    0.0
+                };
+                return (i, b, t);
+            }
+            t -= ms;
+        }
+        (0, 0.0, 0)
+    }
+    fn next_frame(&self, i: usize) -> &str {
+        &self.steps[(i + 1) % self.steps.len()].frame
+    }
+    /// 대표 프레임 (블렌드 중이면 더 많이 보이는 쪽).
+    fn at(&self, now: Instant) -> &str {
+        let (i, b, _) = self.pos(now);
+        if b > 0.5 { self.next_frame(i) } else { &self.steps[i].frame }
+    }
+    fn kind(&self, now: Instant) -> DrawKind {
+        let (i, b, _) = self.pos(now);
+        let (a, n) = (&self.steps[i].frame, self.next_frame(i));
+        if b > 0.0 && a != n {
+            DrawKind::Mix { a: a.clone(), b: n.to_string(), t: b }
+        } else {
+            DrawKind::Layer { name: a.clone() }
+        }
+    }
+    /// 숨쉬기/블렌드/소품이 있어 계속 다시 그려야 하는가.
+    fn moving(&self) -> bool {
+        self.breathe.is_some() || !self.fx.is_empty() || self.steps.iter().any(|s| s.blend_ms > 0)
+    }
+    /// 소품이 보일 정도: `on` 프레임이 보이는 비율.
+    fn on_weight(&self, on: &[String], now: Instant) -> f32 {
+        if on.is_empty() {
+            return 1.0;
+        }
+        let (i, b, _) = self.pos(now);
+        let w = |f: &str| if on.iter().any(|o| o == f) { 1.0 } else { 0.0 };
+        w(&self.steps[i].frame) * (1.0 - b) + w(self.next_frame(i)) * b
+    }
+    /// 숨쉬기 위상 -1~1 (없으면 0).
+    fn breath(&self, now: Instant) -> f32 {
+        self.breathe.as_ref().map_or(0.0, |b| (self.el_ms(now) as f32 / b.period_ms.max(1) as f32 * std::f32::consts::TAU).sin())
+    }
+    /// 블렌드가 없는 장면의 다음 프레임 전환 시각.
+    fn next_flip(&self, now: Instant) -> Option<Instant> {
+        if self.steps.len() < 2 {
+            return None;
+        }
+        let (_, _, t) = self.pos(now);
+        let (i, _, _) = self.pos(now);
+        let left = self.steps[i].ms.max(1) - t;
+        Some(now + Duration::from_millis(left))
+    }
+}
+
 /// 시각 상태. Pet 의 상태 변화와 사건을 받아 시간에 따른 연출로 바꾼다.
 #[derive(Debug, Clone)]
 pub struct Animator {
@@ -195,8 +280,12 @@ pub struct Animator {
     sun_drop: Option<Instant>,
     /// 선글라스 낙하 직전 머리 레이어 (낙하 중에 보이는 머리).
     sun_prev_head: String,
-    pose_fade: Option<(Option<Pose>, Instant)>,
-    prev_pose: Option<Pose>,
+    scenes: BTreeMap<Pose, Vec<Scene>>,
+    /// 발동 조건별로 몇 번 틀었는지 (여러 장면을 돌아가며 고른다).
+    scene_count: BTreeMap<Pose, usize>,
+    full: Option<Full>,
+    prev_full: Option<Full>,
+    pose_fade: Option<Instant>,
 }
 
 impl Animator {
@@ -219,8 +308,17 @@ impl Animator {
             glows: Vec::new(),
             sun_drop: None,
             sun_prev_head: "head/normal".into(),
+            scenes: {
+                let mut v: BTreeMap<Pose, Vec<Scene>> = BTreeMap::new();
+                for sc in &m.scenes {
+                    v.entry(sc.trigger).or_default().push(sc.clone());
+                }
+                v
+            },
+            scene_count: BTreeMap::new(),
+            full: None,
+            prev_full: None,
             pose_fade: None,
-            prev_pose: None,
         }
     }
 
@@ -271,8 +369,9 @@ impl Animator {
             }
         }
         if state.pose != old.pose {
-            self.pose_fade = Some((old.pose, now));
-            self.prev_pose = old.pose;
+            self.pose_fade = Some(now);
+            self.prev_full = self.full.take();
+            self.full = state.pose.and_then(|p| self.start_full(p, now));
         }
         for ev in events {
             match ev {
@@ -287,6 +386,28 @@ impl Animator {
             }
         }
         self.state = state;
+    }
+
+    /// 연출 시작: 이 조건의 장면이 있으면 돌아가며 하나, 없으면 레이어 한 장(full/gesture).
+    fn start_full(&mut self, p: Pose, now: Instant) -> Option<Full> {
+        if let Some(list) = self.scenes.get(&p).filter(|l| !l.is_empty()) {
+            let c = self.scene_count.entry(p).or_default();
+            let sc = &list[*c % list.len()];
+            *c += 1;
+            let steps: Vec<Step> = sc.timeline().into_iter().filter(|s| self.layers.has(&s.frame)).collect();
+            if !steps.is_empty() {
+                let mut f = Full::new(steps, now);
+                f.breathe = sc.breathe.clone();
+                f.fx = sc.fx.iter().filter(|x| self.layers.has(&x.layer)).cloned().collect();
+                return Some(f);
+            }
+        }
+        self.layers.resolve(p.layer()).map(|l| Full::new(vec![Step { frame: l, ms: 1000, blend_ms: 0 }], now))
+    }
+
+    /// 지금 재생 중인 장면 프레임 (테스트/추적용).
+    pub fn full_layer(&self, now: Instant) -> Option<&str> {
+        self.full.as_ref().map(|f| f.at(now))
     }
 
     /// 마우스 흔들기 세기 0~1: 시작할 때 swing_fade_ms 동안 커지고, 마지막 이동 뒤 swing_hold_ms 가 지나면 줄어든다.
@@ -317,12 +438,10 @@ impl Animator {
         let st = self.state;
 
         // 특수 포즈 투명도
-        let pose_now = st.pose.map(|p| p.layer()).and_then(|l| self.layers.resolve(l));
-        let pose_prev = self.prev_pose.map(|p| p.layer()).and_then(|l| self.layers.resolve(l));
-        let pose_p = self.pose_fade.as_ref().map(|(_, s)| ease_in_out(progress(now, *s, a.pose_fade_ms))).unwrap_or(1.0);
-        let (full_layer, full_alpha) = match (&pose_now, &pose_prev) {
-            (Some(l), _) => (Some(l.clone()), pose_p),
-            (None, Some(l)) => (Some(l.clone()), 1.0 - pose_p),
+        let pose_p = self.pose_fade.map(|s| ease_in_out(progress(now, s, a.pose_fade_ms))).unwrap_or(1.0);
+        let (full_layer, full_alpha) = match (&self.full, &self.prev_full) {
+            (Some(f), _) => (Some(f), pose_p),
+            (None, Some(f)) => (Some(f), 1.0 - pose_p),
             (None, None) => (None, 0.0),
         };
 
@@ -423,14 +542,52 @@ impl Animator {
                 cmds.push(f);
             }
         }
-        if let Some(l) = full_layer {
+        if let Some(f) = full_layer {
             if full_alpha > 0.0 {
-                let mut c = DrawCmd::layer(&l);
-                c.opacity = full_alpha;
-                cmds.push(c);
+                cmds.extend(self.full_cmds(f, full_alpha, now));
             }
         }
         Frame { cmds }
+    }
+
+    /// 장면 그리기: 프레임(블렌드), 숨쉬기(머리 마스크 안을 오르내림), 소품.
+    fn full_cmds(&self, f: &Full, alpha: f32, now: Instant) -> Vec<DrawCmd> {
+        let pt = self.px_per_pt;
+        let kind = f.kind(now);
+        let mut v = vec![DrawCmd { kind: kind.clone(), opacity: alpha, ..DrawCmd::layer("") }];
+        let s = f.breath(now);
+        let bob = f.breathe.as_ref().map_or(0.0, |b| -s * b.pt * pt);
+        if let (Some(mask), true) = (self.masks.get("head"), f.breathe.is_some()) {
+            v.push(DrawCmd { kind, opacity: alpha, offset: [0.0, bob], anchor: self.head_anchor, mask: Some(mask.clone()), ..DrawCmd::layer("") });
+        }
+        for x in &f.fx {
+            let w = f.on_weight(&x.on, now) * alpha;
+            if w <= 0.0 {
+                continue;
+            }
+            let u = fract(f.el_ms(now) as f32 / x.period_ms.max(1) as f32 + x.phase);
+            let mut c = DrawCmd::layer(&x.layer);
+            c.anchor = x.anchor;
+            match x.kind {
+                FxKind::Float => {
+                    // 아래에서 나타나 떠오르며 살짝 흔들리다 사라진다
+                    let fade = ease_in_out(u / 0.25) * (1.0 - ease_in_out((u - 0.6) / 0.4));
+                    c.opacity = w * fade;
+                    c.offset = [(u * std::f32::consts::TAU).sin() * 2.0 * pt, -u * x.rise_pt * pt];
+                    c.scale = 0.85 + 0.3 * u;
+                }
+                FxKind::Pulse => {
+                    let k = 0.5 + 0.5 * (u * std::f32::consts::TAU).sin();
+                    c.opacity = w;
+                    c.offset = [0.0, bob];
+                    c.scale = x.scale[0] + (x.scale[1] - x.scale[0]) * k;
+                }
+            }
+            if c.opacity > 0.0 {
+                v.push(c);
+            }
+        }
+        v
     }
 
     /// 머리/마우스/키 빛 연출이 진행 중이라 매 프레임(vsync) 그려야 하는가.
@@ -440,14 +597,14 @@ impl Animator {
         self.swing_active(now)
             || live(self.pop_start, a.pop_ms)
             || self.head_fade.as_ref().is_some_and(|f| progress(now, f.start, a.head_fade_ms) < 1.0)
-            || self.pose_fade.as_ref().is_some_and(|f| progress(now, f.1, a.pose_fade_ms) < 1.0)
+            || self.pose_fade.is_some_and(|s| progress(now, s, a.pose_fade_ms) < 1.0)
             || live(self.sun_drop, a.sunglasses_drop_ms + a.head_fade_ms)
             || !self.glows.iter().all(|g| progress(now, g.start, a.glow_ms) >= 1.0)
     }
 
     /// 아무 연출도 없는 상태 (숨쉬기 대상).
     fn is_still(&self, now: Instant) -> bool {
-        !self.animating(now) && self.state.pose.is_none()
+        !self.animating(now) && self.full.is_none()
     }
 
     /// 연속 애니메이션이 아닐 때 다음에 다시 그려야 하는 시각 (귀 흔들기 80ms, 숨쉬기 30fps).
@@ -458,6 +615,12 @@ impl Animator {
             let el = now.saturating_duration_since(self.dizzy_since).as_millis();
             let next = self.dizzy_since + Duration::from_millis(((el / w + 1) * w) as u64);
             t = Some(next);
+        }
+        if let Some(full) = &self.full {
+            let f = if full.moving() { Some(now + Duration::from_secs_f32(1.0 / self.a.breathe_fps.max(1.0))) } else { full.next_flip(now) };
+            if let Some(f) = f {
+                t = Some(t.map_or(f, |x| x.min(f)));
+            }
         }
         if self.breathing && self.is_still(now) {
             let b = now + Duration::from_secs_f32(1.0 / self.a.breathe_fps.max(1.0));

@@ -30,7 +30,7 @@ pub fn settled_frame(m: &Manifest, state: PetState, wiggle: bool) -> Frame {
     a.frame(t0 + Duration::from_millis(n * w + w / 2))
 }
 
-/// 조합 시트에 넣을 모든 상태 (머리 6 x 왼발 2 x 오른발 5 + 제스처 + 귀 흔들기).
+/// 조합 시트에 넣을 모든 상태 (머리 6 x 왼발 2 x 오른발 5 + 장면 3 + 귀 흔들기).
 pub fn all_states() -> Vec<(String, PetState, bool)> {
     let mut v = Vec::new();
     for head in Head::ALL {
@@ -43,6 +43,8 @@ pub fn all_states() -> Vec<(String, PetState, bool)> {
     }
     v.push(("head-dizzy_wiggle__paw_l-up__paw_r-up".into(), PetState { head: Head::Dizzy, ..Default::default() }, true));
     v.push(("full-gesture".into(), PetState { pose: Some(Pose::Gesture), ..Default::default() }, false));
+    v.push(("full-idle".into(), PetState { pose: Some(Pose::Idle), ..Default::default() }, false));
+    v.push(("full-milestone".into(), PetState { pose: Some(Pose::Milestone), ..Default::default() }, false));
     v
 }
 

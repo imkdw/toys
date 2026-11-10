@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::pet::Pose;
+
 /// 사용자 설정. `~/Library/Application Support/typing-pet/config.toml` 에 저장.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -81,6 +83,9 @@ pub struct Manifest {
     /// 마우스 연출 축. 없으면 마우스 자세는 한 장으로 가만히 있다.
     #[serde(default)]
     pub swing: Option<Swing>,
+    /// 애니 장면 연출 (`[[scene]]`). 발동 조건별로 여러 개면 돌아가며 쓴다.
+    #[serde(default, rename = "scene")]
+    pub scenes: Vec<Scene>,
     #[serde(default)]
     pub timing: Timing,
     #[serde(default)]
@@ -110,6 +115,121 @@ impl Swing {
     }
 }
 
+/// 애니메이션 장면 하나: 전체 프레임 레이어 여러 장을 `frame_ms` 마다 돌려 그린다.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Scene {
+    pub name: String,
+    /// 발동 조건: gesture(과열이 식을 때), idle(한동안 입력 없음), milestone(키 N번째).
+    pub trigger: Pose,
+    /// full/ 레이어 이름들 (frame_ms 마다 순서대로 반복). `step` 이 있으면 그쪽을 쓴다.
+    #[serde(default)]
+    pub frames: Vec<String>,
+    #[serde(default = "Scene::default_frame_ms")]
+    pub frame_ms: u64,
+    /// 장면 길이. 없으면 timing 값(gesture_ms, idle_scene_ms, milestone_ms).
+    /// idle 장면만 0 을 쓸 수 있고, 0 이면 입력이 올 때까지 계속한다.
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    /// 단계별 프레임/길이/다음 단계로 넘어가는 크로스페이드 (반복).
+    #[serde(default, rename = "step")]
+    pub steps: Vec<Step>,
+    /// 숨쉬기: 머리 마스크 안을 천천히 오르내린다.
+    #[serde(default)]
+    pub breathe: Option<Breathe>,
+    /// 장면 위에 얹어 움직이는 소품 (Zzz, 콧방울 등).
+    #[serde(default)]
+    pub fx: Vec<SceneFx>,
+}
+
+impl Scene {
+    fn default_frame_ms() -> u64 {
+        400
+    }
+
+    /// 재생 순서. step 이 없으면 frames 를 frame_ms 마다.
+    pub fn timeline(&self) -> Vec<Step> {
+        if !self.steps.is_empty() {
+            return self.steps.clone();
+        }
+        self.frames.iter().map(|f| Step { frame: f.clone(), ms: self.frame_ms, blend_ms: 0 }).collect()
+    }
+
+    /// 이 장면이 쓰는 레이어 이름들.
+    pub fn layer_names(&self) -> Vec<&str> {
+        self.frames.iter().map(|s| s.as_str()).chain(self.steps.iter().map(|s| s.frame.as_str())).chain(self.fx.iter().map(|f| f.layer.as_str())).collect()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Step {
+    pub frame: String,
+    pub ms: u64,
+    /// 이 단계의 끝 blend_ms 동안 다음 단계 프레임으로 크로스페이드.
+    #[serde(default)]
+    pub blend_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Breathe {
+    pub period_ms: u64,
+    /// 오르내림 폭 (pt).
+    #[serde(default = "Breathe::default_pt")]
+    pub pt: f32,
+}
+
+impl Breathe {
+    fn default_pt() -> f32 {
+        1.5
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FxKind {
+    /// anchor 에서 위로 떠오르며 나타났다 사라진다 (Zzz).
+    Float,
+    /// anchor 를 기준으로 커졌다 작아진다 (콧방울). 숨쉬기 오르내림도 따라간다.
+    Pulse,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SceneFx {
+    pub layer: String,
+    pub kind: FxKind,
+    /// 움직임 기준점 (캔버스 px). pulse 는 붙어 있는 자리.
+    pub anchor: [f32; 2],
+    #[serde(default = "SceneFx::default_period")]
+    pub period_ms: u64,
+    /// 위상 (0~1). 여러 개를 엇갈리게 띄울 때.
+    #[serde(default)]
+    pub phase: f32,
+    /// float: 한 주기 동안 떠오르는 높이 (pt).
+    #[serde(default = "SceneFx::default_rise")]
+    pub rise_pt: f32,
+    /// pulse: 가장 작을 때/클 때 배율.
+    #[serde(default = "SceneFx::default_scale")]
+    pub scale: [f32; 2],
+    /// 이 프레임들이 보일 때만 보인다 (비면 항상). 블렌드 중에는 같이 흐려진다.
+    #[serde(default)]
+    pub on: Vec<String>,
+}
+
+impl SceneFx {
+    fn default_period() -> u64 {
+        2400
+    }
+    fn default_rise() -> f32 {
+        18.0
+    }
+    fn default_scale() -> [f32; 2] {
+        [0.4, 1.0]
+    }
+}
+
 /// 상태 머신 타이밍 (PLAN 5.3).
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -128,6 +248,12 @@ pub struct Timing {
     pub gesture: bool,
     pub gesture_ms: u64,
     pub gesture_cooldown_s: u64,
+    /// 입력이 이만큼 없으면 idle 장면 (0 이면 끔). 한 번 쉬는 동안 한 번만.
+    pub idle_scene_s: u64,
+    pub idle_scene_ms: u64,
+    /// 키를 이만큼 칠 때마다 milestone 장면 (0 이면 끔).
+    pub milestone_keys: u64,
+    pub milestone_ms: u64,
     pub sunglasses_ms: u64,
     pub easter_egg_repeat: u32,
 }
@@ -147,6 +273,10 @@ impl Default for Timing {
             gesture: true,
             gesture_ms: 2000,
             gesture_cooldown_s: 300,
+            idle_scene_s: 20,
+            idle_scene_ms: 6000,
+            milestone_keys: 300,
+            milestone_ms: 2500,
             sunglasses_ms: 30_000,
             easter_egg_repeat: 10,
         }
@@ -270,6 +400,7 @@ impl Manifest {
         let mut manifest: Manifest = toml::from_str(&text)?;
         manifest.dir = dir.to_path_buf();
         manifest.validate()?;
+        manifest.apply_scenes();
         Ok(manifest)
     }
 
@@ -289,7 +420,46 @@ impl Manifest {
         if t.half_life_s <= 0.0 {
             return Err("half_life_s 는 0 보다 커야 함".into());
         }
+        for sc in &self.scenes {
+            let tl = sc.timeline();
+            if tl.is_empty() {
+                return Err(format!("장면 {} 에 frames 나 step 이 없음", sc.name));
+            }
+            if let Some(f) = sc.layer_names().into_iter().find(|f| !self.layers.iter().any(|l| l == f)) {
+                return Err(format!("장면 {} 의 레이어 {f} 이 layers 에 없음", sc.name));
+            }
+            if tl.iter().any(|s| s.ms == 0 || s.blend_ms > s.ms) {
+                return Err(format!("장면 {} 의 단계 길이는 0 보다 크고 blend_ms 이상이어야 함", sc.name));
+            }
+            if sc.duration_ms == Some(0) && sc.trigger != Pose::Idle {
+                return Err(format!("장면 {}: duration_ms = 0 (입력까지 계속)은 idle 장면만 쓸 수 있음", sc.name));
+            }
+            if sc.breathe.as_ref().is_some_and(|b| b.period_ms == 0) || sc.fx.iter().any(|f| f.period_ms == 0) {
+                return Err(format!("장면 {} 의 period_ms 는 0 보다 커야 함", sc.name));
+            }
+        }
         Ok(())
+    }
+
+    /// 장면이 없는 발동 조건(idle, milestone)은 끄고, 장면 길이를 타이밍에 반영한다.
+    pub fn apply_scenes(&mut self) {
+        let first = |p: Pose| self.scenes.iter().find(|s| s.trigger == p).map(|s| s.duration_ms);
+        let t = &mut self.timing;
+        match first(Pose::Idle) {
+            None => t.idle_scene_s = 0,
+            Some(d) => t.idle_scene_ms = d.unwrap_or(t.idle_scene_ms),
+        }
+        match first(Pose::Milestone) {
+            None => t.milestone_keys = 0,
+            Some(d) => t.milestone_ms = d.unwrap_or(t.milestone_ms),
+        }
+        if let Some(Some(d)) = first(Pose::Gesture) {
+            t.gesture_ms = d;
+        }
+    }
+
+    pub fn scenes_for(&self, p: Pose) -> Vec<&Scene> {
+        self.scenes.iter().filter(|s| s.trigger == p).collect()
     }
 
     pub fn layer_path(&self, name: &str) -> PathBuf {
