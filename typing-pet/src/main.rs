@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use typing_pet::anim::Animator;
-use typing_pet::config::{Config, Manifest};
+use typing_pet::config::{self, Config, Manifest};
 use typing_pet::input::{self, Cursor, Input};
 use typing_pet::pet::{Pet, PetState};
 use typing_pet::render::{self, HitMap, Renderer};
@@ -14,7 +14,7 @@ use typing_pet::tray::{Tray, TrayAction};
 use typing_pet::{mac, trace};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::event::{ElementState, MouseButton, StartCause, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS, WindowAttributesExtMacOS};
 use winit::window::{Window, WindowId, WindowLevel};
@@ -77,7 +77,7 @@ impl WindowGpu {
         self.config.width = w;
         self.config.height = h;
         self.surface.configure(&self.renderer.device, &self.config);
-        self.renderer.prepare(w.max(h));
+        // 텍스처는 크기 조절이 멈춘 뒤 App::settle 에서 다시 만든다 (그동안은 기존 텍스처를 늘려 그린다)
     }
 }
 
@@ -101,6 +101,8 @@ struct App {
     redraw_at: Option<Instant>,
     last_frame: Option<Instant>,
     frames: u64,
+    /// 크기 조절이 멈췄다고 보는 시각. 이때 텍스처를 새 크기로 만들고 설정을 저장한다.
+    settle_at: Option<Instant>,
     /// 벤치마크: 이 시각까지 계속 그린다 (TYPING_PET_BENCH=초).
     bench_until: Option<Instant>,
 }
@@ -128,6 +130,7 @@ impl App {
             redraw_at: None,
             last_frame: None,
             frames: 0,
+            settle_at: None,
             bench_until: std::env::var("TYPING_PET_BENCH")
                 .ok()
                 .and_then(|v| v.parse::<f64>().ok())
@@ -387,14 +390,7 @@ impl App {
                 self.request_redraw();
                 self.save();
             }
-            TrayAction::Size(s) => {
-                self.cfg.size = s;
-                self.anim.set_size_pt(self.manifest.canvas, s as f32);
-                if let Some(w) = &self.window {
-                    let _ = w.request_inner_size(LogicalSize::new(s, s));
-                }
-                self.save();
-            }
+            TrayAction::Size(s) => self.set_size(s),
             TrayAction::Character(i) => {
                 if let Some(name) = self.tray.as_ref().and_then(|t| t.character(i)).map(str::to_string) {
                     self.switch_character(&name);
@@ -455,6 +451,42 @@ impl App {
         self.request_redraw();
     }
 
+    /// 크기를 바꾼다. 아래 가운데를 기준으로 커지고 작아진다 (책상에 앉은 채로).
+    fn set_size(&mut self, s: f64) {
+        let s = config::clamp_size(s);
+        let old = self.cfg.size;
+        if (s - old).abs() < 0.5 {
+            return;
+        }
+        self.cfg.size = s;
+        self.anim.set_size_pt(self.manifest.canvas, s as f32);
+        if let Some(w) = &self.window {
+            if let Ok(p) = w.outer_position() {
+                let p = p.to_logical::<f64>(w.scale_factor());
+                let (x, y) = (p.x + (old - s) / 2.0, p.y + (old - s));
+                w.set_outer_position(LogicalPosition::new(x, y));
+                self.cfg.position = Some((x, y));
+            }
+            let _ = w.request_inner_size(LogicalSize::new(s, s));
+        }
+        self.settle_at = Some(Instant::now() + Duration::from_millis(300));
+        if let Some(t) = &self.tray {
+            t.sync(&self.cfg);
+        }
+        self.request_redraw();
+    }
+
+    /// 크기 조절이 끝났으면 텍스처를 새 픽셀 크기로 만들고 저장.
+    fn settle(&mut self) {
+        self.settle_at = None;
+        if let (Some(w), Some(g)) = (&self.window, &mut self.gpu) {
+            let z = w.inner_size();
+            g.renderer.prepare(z.width.max(z.height));
+        }
+        self.save();
+        self.request_redraw();
+    }
+
     fn save(&self) {
         if let Err(e) = self.cfg.save() {
             log::warn!("설정 저장 실패: {e}");
@@ -464,7 +496,7 @@ impl App {
     fn schedule(&mut self, el: &ActiveEventLoop) {
         let now = Instant::now();
         self.redraw_at = self.anim.next_redraw(now);
-        let wake = [self.pet.next_deadline(now), self.redraw_at, self.next_tap_retry].into_iter().flatten().min();
+        let wake = [self.pet.next_deadline(now), self.redraw_at, self.next_tap_retry, self.settle_at].into_iter().flatten().min();
         el.set_control_flow(match wake {
             Some(t) => ControlFlow::WaitUntil(t),
             None => ControlFlow::Wait,
@@ -510,6 +542,9 @@ impl ApplicationHandler<AppEvent> for App {
             if self.redraw_at.is_some_and(|t| t <= now) {
                 self.request_redraw();
             }
+            if self.settle_at.is_some_and(|t| t <= now) {
+                self.settle();
+            }
         }
     }
 
@@ -538,6 +573,10 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(g) = &mut self.gpu {
                     g.resize(size.width, size.height);
                 }
+                if self.settle_at.is_none() {
+                    // 크기 조절 중이 아니면 (배율 변경 등) 바로 텍스처를 맞춘다
+                    self.settle_at = Some(Instant::now());
+                }
                 self.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { .. } => {
@@ -556,12 +595,27 @@ impl ApplicationHandler<AppEvent> for App {
                     let _ = w.drag_window();
                 }
             }
+            // 캐릭터 위에서 스크롤: 위로 굴리면 커지고 아래로 굴리면 작아진다
+            WindowEvent::MouseWheel { delta, .. } if self.hover && !self.dragging => {
+                let k = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => 1.08f64.powf(y as f64),
+                    MouseScrollDelta::PixelDelta(p) => (p.y / 300.0).exp(),
+                };
+                self.set_size(self.cfg.size * k);
+            }
+            // 트랙패드 핀치
+            WindowEvent::PinchGesture { delta, .. } if self.hover && !self.dragging => {
+                self.set_size(self.cfg.size * (1.0 + delta));
+            }
             _ => {}
         }
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         self.sync(Instant::now());
+        if self.settle_at.is_some_and(|t| t <= Instant::now()) {
+            self.settle();
+        }
         self.schedule(el);
     }
 

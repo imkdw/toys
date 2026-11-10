@@ -30,6 +30,15 @@ impl Default for Config {
 
 pub const SIZES: [f64; 5] = [160.0, 200.0, 240.0, 320.0, 400.0];
 
+/// 자유 크기 조절(스크롤/핀치) 범위 (pt).
+pub const MIN_SIZE: f64 = 80.0;
+pub const MAX_SIZE: f64 = 800.0;
+
+/// 범위 안으로 넣고 1pt 단위로 맞춘다. 숫자가 아니면 기본 크기.
+pub fn clamp_size(s: f64) -> f64 {
+    if s.is_finite() { s.round().clamp(MIN_SIZE, MAX_SIZE) } else { Config::default().size }
+}
+
 impl Config {
     pub fn path() -> Option<PathBuf> {
         if let Ok(p) = std::env::var("TYPING_PET_CONFIG") {
@@ -41,13 +50,15 @@ impl Config {
     /// 파일이 없거나 깨졌으면 기본값.
     pub fn load() -> Self {
         let Some(path) = Self::path() else { return Self::default() };
-        match std::fs::read_to_string(&path) {
+        let mut cfg: Self = match std::fs::read_to_string(&path) {
             Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
                 log::warn!("설정 파일이 깨져서 기본값 사용: {e}");
                 Self::default()
             }),
             Err(_) => Self::default(),
-        }
+        };
+        cfg.size = clamp_size(cfg.size);
+        cfg
     }
 
     pub fn save(&self) -> std::io::Result<()> {

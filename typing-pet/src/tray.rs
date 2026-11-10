@@ -25,6 +25,8 @@ pub struct Tray {
     breathing: CheckMenuItem,
     login: CheckMenuItem,
     sizes: Vec<(f64, CheckMenuItem)>,
+    /// 지금 크기 표시 + 자유 조절 안내 (누를 수 없음).
+    size_now: MenuItem,
     /// (폴더 이름, 메뉴 항목)
     characters: Vec<(String, CheckMenuItem)>,
     warning: MenuItem,
@@ -60,6 +62,10 @@ fn icon() -> Icon {
     Icon::from_rgba(rgba, n, n).expect("아이콘")
 }
 
+fn size_label(size: f64) -> String {
+    format!("지금 {size:.0} pt (캐릭터 위에서 스크롤/핀치로 조절)")
+}
+
 impl Tray {
     /// `characters`: (폴더 이름, 메뉴 이름) 목록, `current`: 지금 캐릭터 폴더 이름.
     pub fn new(
@@ -85,6 +91,10 @@ impl Tray {
             size_menu.append(&item).map_err(|e| e.to_string())?;
             sizes.push((s, item));
         }
+        let size_now = MenuItem::new(size_label(cfg.size), false, None);
+        size_menu
+            .append_items(&[&PredefinedMenuItem::separator(), &size_now])
+            .map_err(|e| e.to_string())?;
         let login = CheckMenuItem::new("로그인 시 자동 실행", crate::mac::bundle_path().is_some(), crate::mac::login_item_enabled(), None);
         let warning = MenuItem::new("⚠ 입력 모니터링 권한 필요 (설정 열기)", true, None);
         let quit = MenuItem::new("종료", true, None);
@@ -117,7 +127,7 @@ impl Tray {
             .with_tooltip("typing-pet")
             .build()
             .map_err(|e| e.to_string())?;
-        Ok(Self { _icon: icon, menu, visible, breathing, login, sizes, characters: chars, warning, warning_shown: false, ids })
+        Ok(Self { _icon: icon, menu, visible, breathing, login, sizes, size_now, characters: chars, warning, warning_shown: false, ids })
     }
 
     /// 순번 -> 캐릭터 폴더 이름.
@@ -139,6 +149,7 @@ impl Tray {
         for (s, item) in &self.sizes {
             item.set_checked((cfg.size - s).abs() < 0.5);
         }
+        self.size_now.set_text(size_label(cfg.size));
     }
 
     /// 입력 모니터링 권한이 없을 때 메뉴 맨 위에 경고 표시.
