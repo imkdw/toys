@@ -344,7 +344,7 @@ fn gesture_on_overheat_cooldown_with_reuse_delay() {
     let tt = type_at(&mut p, t0, 20.0, 10.0, &mut log);
     let mut any = false;
     for i in 0..400 {
-        any |= st(&mut p, tt + ms(i * 50)).pose.is_some();
+        any |= st(&mut p, tt + ms(i * 50)).pose == Some(Pose::Gesture);
     }
     assert!(!any);
 }
@@ -496,6 +496,101 @@ fn gesture_full_frame_replaces_layers() {
     assert!(full.opacity > 0.0 && full.opacity < 1.0);
     let done = a.frame(t0 + ms(300));
     assert_eq!(done.layer_names(), vec!["full/gesture"]);
+}
+
+// ---------- 애니 장면 (idle, milestone, 프레임 반복) ----------
+
+#[test]
+fn idle_scene_once_per_rest_and_input_cancels() {
+    let (mut p, t0) = new_pet();
+    p.on_input(Input::Key(0), t0);
+    p.advance(t0 + ms(19_000));
+    assert_eq!(p.next_deadline(t0 + ms(19_000)), Some(t0 + ms(20_000)));
+    assert_eq!(st(&mut p, t0 + ms(19_999)).pose, None);
+    assert_eq!(st(&mut p, t0 + ms(20_000)).pose, Some(Pose::Idle));
+    assert_eq!(st(&mut p, t0 + ms(25_999)).pose, Some(Pose::Idle));
+    assert_eq!(st(&mut p, t0 + ms(26_000)).pose, None, "6초 뒤 끝");
+    assert_eq!(st(&mut p, t0 + ms(50_000)).pose, None, "한 번 쉬는 동안 한 번만");
+    // 다시 쉬면 또 한다. 입력이 오면 바로 끝
+    p.on_input(Input::MouseMove, t0 + ms(51_000));
+    assert_eq!(st(&mut p, t0 + ms(72_000)).pose, Some(Pose::Idle));
+    p.on_input(Input::Key(0), t0 + ms(72_500));
+    assert_eq!(st(&mut p, t0 + ms(72_500)).pose, None);
+    // 앱이 늦게 깨어나도 끝난 장면은 틀지 않는다
+    let (mut p, t0) = new_pet();
+    assert_eq!(st(&mut p, t0 + ms(40_000)).pose, None);
+}
+
+#[test]
+fn milestone_scene_every_n_keys() {
+    let mut t = Timing::default();
+    t.milestone_keys = 5;
+    t.idle_scene_s = 0;
+    let t0 = Instant::now();
+    let mut p = Pet::new(t, Keys::default(), t0);
+    for i in 0..4 {
+        p.on_input(Input::Key(0), t0 + ms(i * 200));
+    }
+    assert_eq!(st(&mut p, t0 + ms(800)).pose, None);
+    p.on_input(Input::Key(0), t0 + ms(1000));
+    assert_eq!(st(&mut p, t0 + ms(1000)).pose, Some(Pose::Milestone));
+    p.advance(t0 + ms(2000));
+    assert_eq!(p.next_deadline(t0 + ms(2000)), Some(t0 + ms(3500)));
+    assert_eq!(st(&mut p, t0 + ms(3499)).pose, Some(Pose::Milestone), "치는 중에도 계속");
+    assert_eq!(st(&mut p, t0 + ms(3500)).pose, None);
+}
+
+fn scene_manifest() -> Manifest {
+    let mut m = test_manifest();
+    m.scenes = toml::from_str::<toml::Table>(
+        r#"
+[[scene]]
+name = "wave"
+trigger = "milestone"
+frames = ["full/gesture", "head/excited"]
+frame_ms = 300
+duration_ms = 1800
+"#,
+    )
+    .unwrap()["scene"]
+        .clone()
+        .try_into()
+        .unwrap();
+    m.validate().unwrap();
+    m.apply_scenes();
+    m
+}
+
+#[test]
+fn scenes_switch_timing_and_disable_missing_triggers() {
+    let m = scene_manifest();
+    assert_eq!(m.timing.milestone_ms, 1800);
+    assert_eq!(m.timing.idle_scene_s, 0, "idle 장면이 없으면 끈다");
+    let mut bad = m.clone();
+    bad.scenes[0].frames.push("full/nope".into());
+    assert!(bad.validate().is_err());
+    let mut plain = test_manifest();
+    plain.apply_scenes();
+    assert_eq!(plain.timing.milestone_keys, 0);
+}
+
+#[test]
+fn scene_frames_loop_and_fade_out() {
+    let m = scene_manifest();
+    let t0 = Instant::now();
+    let mut a = Animator::new(&m, 240.0, t0);
+    a.update(PetState { pose: Some(Pose::Milestone), ..Default::default() }, &[], t0);
+    assert_eq!(a.full_layer(t0 + ms(299)), Some("full/gesture"));
+    assert_eq!(a.full_layer(t0 + ms(300)), Some("head/excited"));
+    assert_eq!(a.full_layer(t0 + ms(600)), Some("full/gesture"));
+    assert_eq!(a.frame(t0 + ms(400)).layer_names(), vec!["head/excited"]);
+    assert_eq!(a.next_redraw(t0 + ms(400)), Some(t0 + ms(600)));
+    // 장면이 없는 조건(gesture)은 full/gesture 한 장
+    a.update(PetState { pose: Some(Pose::Gesture), ..Default::default() }, &[], t0 + ms(1000));
+    assert_eq!(a.frame(t0 + ms(2000)).layer_names(), vec!["full/gesture"]);
+    // 끝나면 원래 장면으로
+    a.update(PetState::default(), &[], t0 + ms(3000));
+    assert!(!a.frame(t0 + ms(4000)).layer_names().iter().any(|n| n.starts_with("full/")));
 }
 
 #[test]
