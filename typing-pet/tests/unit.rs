@@ -623,9 +623,25 @@ fn config_roundtrip() {
     c.breathing = false;
     c.save().unwrap();
     assert_eq!(typing_pet::config::Config::load(), c);
+    // 자유 크기 조절로 저장된 값도 그대로 돌아온다
+    c.size = 287.0;
+    c.save().unwrap();
+    assert_eq!(typing_pet::config::Config::load().size, 287.0);
+    // 범위 밖 값은 범위 안으로
+    std::fs::write(&path, "size = 5000.0").unwrap();
+    assert_eq!(typing_pet::config::Config::load().size, typing_pet::config::MAX_SIZE);
     std::fs::write(&path, "not = [valid").unwrap();
     assert_eq!(typing_pet::config::Config::load(), typing_pet::config::Config::default());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn clamp_size_range() {
+    use typing_pet::config::{clamp_size, MAX_SIZE, MIN_SIZE};
+    assert_eq!(clamp_size(10.0), MIN_SIZE);
+    assert_eq!(clamp_size(10_000.0), MAX_SIZE);
+    assert_eq!(clamp_size(241.4), 241.0);
+    assert_eq!(clamp_size(f64::NAN), 240.0);
 }
 
 // ---------- 마우스 연출 ----------
