@@ -48,6 +48,17 @@ pub fn all_states() -> Vec<(String, PetState, bool)> {
     v
 }
 
+/// `--scenario` 이름별 입력: demo(기본, [`timeline_inputs`]), idle(키 하나 뒤 입력 없음), milestone(키를 빠르게 계속).
+pub fn scenario_inputs(name: &str) -> Option<Vec<(u64, crate::input::Input)>> {
+    use crate::input::Input;
+    match name {
+        "demo" => Some(timeline_inputs()),
+        "idle" => Some(vec![(300, Input::Key(0))]),
+        "milestone" => Some((0..400u64).map(|k| (300 + k * 40, Input::Key([0u16, 37, 1, 38][k as usize % 4]))).collect()),
+        _ => None,
+    }
+}
+
 /// 참고 영상(PLAN 1.2)을 흉내 낸 입력 시나리오: (시각 ms, 입력).
 /// 빠르게 쳐서 신남 -> 빙글 안경 -> 과열, 멈춰서 식으며 제스처, 마우스, 10연타 선글라스.
 pub fn timeline_inputs() -> Vec<(u64, crate::input::Input)> {

@@ -632,7 +632,8 @@ impl ApplicationHandler<AppEvent> for App {
     }
 }
 
-/// `--render-state <json> --out <png> [--size px] [--wiggle]` 또는 `--render-all <dir> [--size px]`.
+/// `--render-state <json> --out <png> [--size px] [--wiggle]`, `--render-all <dir> [--size px]`,
+/// `--render-timeline <dir> [--fps n] [--secs n] [--scenario demo|idle|milestone] [--start 초]`.
 fn cli_render(args: &[String]) -> Option<Result<(), String>> {
     let get = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     let state_arg = get("--render-state");
@@ -673,7 +674,10 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
             let t0 = Instant::now();
             let mut pet = Pet::new(manifest.timing.clone(), manifest.keys.clone(), t0);
             let mut anim = Animator::new(&manifest, 240.0, t0);
-            let inputs = typing_pet::timeline_inputs();
+            let scenario = get("--scenario").unwrap_or_else(|| "demo".into());
+            let inputs = typing_pet::scenario_inputs(&scenario).ok_or(format!("알 수 없는 --scenario: {scenario} (demo, idle, milestone)"))?;
+            // --start 초 이전 프레임은 상태만 진행하고 그리지 않는다
+            let start_ms: u64 = get("--start").and_then(|s| s.parse().ok()).unwrap_or(0) * 1000;
             let mut next = 0;
             let mut log = Vec::new();
             for f in 0..fps * secs {
@@ -692,6 +696,9 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
                 let st = pet.state(now);
                 let ev = pet.drain_events();
                 anim.update(st, &ev, now);
+                if now_ms < start_ms {
+                    continue;
+                }
                 off.render(&anim.frame(now)).save(format!("{dir}/{f:05}.png")).map_err(|e| e.to_string())?;
                 log.push(serde_json::json!({"ms": now_ms, "state": st, "score": (pet.score(now) * 10.0).round() / 10.0}));
             }
