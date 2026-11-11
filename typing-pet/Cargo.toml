@@ -28,7 +28,7 @@ fast_image_resize = "5"
 
 # macOS 창 설정 (창 레벨, Space 동작)
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSView", "NSResponder", "NSApplication", "NSRunningApplication", "NSScreen", "NSGraphics", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3", features = ["NSAccessibilityProtocols", "NSWindow", "NSView", "NSResponder", "NSApplication", "NSRunningApplication", "NSScreen", "NSGraphics", "NSWorkspace"] }
 objc2-foundation = "0.3"
 
 # 메뉴바

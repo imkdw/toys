@@ -4,7 +4,7 @@
 //! NSWindow 레벨을 올리고 `canJoinAllSpaces | fullScreenAuxiliary | stationary` 를 준다.
 
 use objc2::rc::Retained;
-use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSView, NSWindow, NSWindowCollectionBehavior, NSWorkspace};
+use objc2_app_kit::{NSAccessibility as _, NSApplicationActivationOptions, NSRunningApplication, NSView, NSWindow, NSWindowCollectionBehavior, NSWorkspace};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
@@ -30,6 +30,10 @@ pub fn setup_overlay(window: &Window) {
     );
     w.setHasShadow(false);
     w.setOpaque(false);
+    // 접근성 트리에서 창을 뺀다. Rectangle 같은 창 관리 앱은 맨 앞 앱에 창이 없으면
+    // 화면 맨 위 창(레벨이 높은 이 창)을 대상으로 잡아 옮기고 크기를 바꿔 버린다.
+    // 접근성 요소가 아니면 앱의 AXWindows/AXFocusedWindow 에 안 나오므로 건드릴 수 없다.
+    w.setAccessibilityElement(false);
 }
 
 /// CGWindowID (screencapture -l 에 쓴다).

@@ -570,6 +570,14 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::Resized(size) => {
+                // 우리가 바꾼 게 아닌데 크기가 달라졌으면 (창 관리 앱 등) 원래 크기로 되돌린다
+                if let Some(w) = &self.window {
+                    let z = size.to_logical::<f64>(w.scale_factor());
+                    if self.settle_at.is_none() && ((z.width - self.cfg.size).abs() > 1.0 || (z.height - self.cfg.size).abs() > 1.0) {
+                        log::info!("바깥에서 창 크기가 {}x{} 로 바뀌어 {} 로 되돌림", z.width, z.height, self.cfg.size);
+                        let _ = w.request_inner_size(LogicalSize::new(self.cfg.size, self.cfg.size));
+                    }
+                }
                 if let Some(g) = &mut self.gpu {
                     g.resize(size.width, size.height);
                 }
