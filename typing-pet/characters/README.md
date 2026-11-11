@@ -12,7 +12,7 @@ characters/<name>/
 │   ├── head/*.png           머리 변형 (마스크 안을 교체)
 │   ├── paw_l/*.png          왼앞발 자세
 │   ├── paw_r/*.png          오른앞발 자세 (mouse_bg: 마우스 자세에서 팔을 치운 바탕)
-│   ├── fx/*.png             선글라스 단독, 마우스 잡은 팔(mouse_arm) (일반 합성)
+│   ├── fx/*.png             선글라스 단독, 마우스 잡은 팔(mouse_arm), 장면 소품(bubble, zzz) (일반 합성)
 │   ├── full/*.png           장면 프레임(full/<장면>_a, _b ..)과 제스처 같은 전체 프레임
 │   └── mask/*.png           head, paw_l, paw_r 영역 마스크
 └── baseline/       조합 시트 기준 이미지 (scripts/verify.sh)
@@ -43,9 +43,52 @@ duration_ms = 6000        # 없으면 [timing] 의 gesture_ms / idle_scene_ms / 
 - idle/milestone 장면이 없는 캐릭터는 그 연출을 하지 않고, gesture 장면이 없으면 `full/gesture` 한 장을 쓴다.
 - 같은 조건의 장면이 여러 개면 돌아가며 고른다.
 
+움직임이 더 필요한 장면은 `frames` 대신 단계(`step`), 숨쉬기(`breathe`), 소품(`fx`)을 쓴다. 우사기 수면 장면:
+
+```toml
+[[scene]]
+name = "sleep"
+trigger = "idle"
+duration_ms = 0           # idle 장면만 0 가능: 입력이 올 때까지 계속
+
+[scene.breathe]           # 머리 마스크 안을 천천히 오르내림
+period_ms = 3600
+pt = 1.8
+
+[[scene.step]]            # 단계를 순서대로 반복. 단계 끝 blend_ms 동안 다음 프레임으로 크로스페이드
+frame = "full/sleep_a"    # 비렘: 감은 눈
+ms = 7000
+blend_ms = 700
+
+[[scene.step]]
+frame = "full/sleep_rem_a"  # 렘: 반쯤 뜬 눈, 중얼거림 (rem_b 와 번갈아)
+ms = 1400
+blend_ms = 250
+
+[[scene.fx]]
+layer = "fx/bubble"       # 콧방울
+kind = "pulse"            # anchor 기준으로 scale[0]~scale[1] 사이를 커졌다 작아짐
+anchor = [524, 498]       # 캔버스 px
+period_ms = 3600
+scale = [0.3, 1.0]
+on = ["full/sleep_a"]     # 이 프레임이 보일 때만 (블렌드 중엔 같이 흐려짐)
+
+[[scene.fx]]
+layer = "fx/zzz"
+kind = "float"            # anchor 에서 rise_pt 만큼 떠오르며 나타났다 사라짐
+anchor = [714, 240]
+period_ms = 3000
+rise_pt = 14
+on = ["full/sleep_a"]
+```
+
+소품 레이어는 picks.json 의 `"_fx": {"<이름>": {"src": "<소품이 있는 후보>", "ref": "<소품만 없는 후보>"}}` 로 정하면
+build.sh 의 `art/scripts/extract_fx.py` 가 두 그림의 차이만 잘라 `fx/<이름>` 으로 만든다 (경계 상자를 찍어 주니 anchor 를 잡을 때 참고).
+장면 움직임은 `typing-pet --render-timeline <폴더> --scenario idle --secs 42 --start 19` (milestone 은 `--scenario milestone --secs 15 --start 11`)로 프레임을 뽑아 확인한다.
+
 | 캐릭터 | idle | milestone | gesture (과열이 식을 때) |
 |---|---|---|---|
-| 우사기 | 주먹밥을 입 크게 벌려 먹기 (e085, e084) | "야하!" 양팔 번쩍 (e204) | 해골 지팡이 휘두르기 (e036) |
+| 우사기 | 책상에서 졸기: 콧방울/Zzz 비렘과 눈 굴리며 중얼대는 렘 반복 (만화 2023-02-06, 2026-09-09) | "야하!" 양팔 번쩍 (e204) | 해골 지팡이 휘두르기 (e036) |
 | 치이카와 | 브로콜리 먹고 감동해서 눈물 (e004) | 제초 검정 5급 합격증 들어 올리기 (e224) | 엉엉 울기 (e224, e185) |
 | 하치와레 | 코스 요리 책 읽기 (e201) | 카메라로 사진 찍기 (e037, e216) | 기타 치며 노래 |
 
