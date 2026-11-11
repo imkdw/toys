@@ -32,5 +32,6 @@ for p in $mapfile_picks; do [[ "$p" != "$base" ]] && vars+=("$W/chroma/$p.png");
 "$PY" "$S/align.py" --base "$W/base.png" "${vars[@]}" -o "$W/aligned"
 "$PY" "$S/colormatch.py" --base "$W/base.png" "$W"/aligned/*.png -o "$W/matched"
 "$PY" "$S/automask.py" --name "$name" $remask
+"$PY" "$S/extract_fx.py" --name "$name"
 "$PY" "$S/slice.py" --name "$name"
 "$PY" "$S/preview.py" --name "$name" -o "$W/preview"

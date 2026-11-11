@@ -394,7 +394,7 @@ def main() -> None:
     if "paw_r/mouse" in picks and (WORK / "matched" / f"{picks['paw_r/mouse']}.png").exists():
         swing = mouse_swing(out, srcs["paw_r/mouse"], masks["paw_r"], chg["paw_r/mouse"])
         names += ["paw_r/mouse_bg", "fx/mouse_arm"]
-    # 장면 소품 (art/scripts/draw_fx.py 가 work/fx/ 에 그린 것): 그대로 fx/ 로
+    # 장면 소품 (art/scripts/extract_fx.py 가 work/fx/ 에 잘라 둔 것): 그대로 fx/ 로
     for f in sorted((WORK / "fx").glob("*.png")) if (WORK / "fx").is_dir() else []:
         save_layer(out, f"fx/{f.stem}", np.array(Image.open(f).convert("RGBA")))
         names.append(f"fx/{f.stem}")
