@@ -593,6 +593,153 @@ fn scene_frames_loop_and_fade_out() {
     assert!(!a.frame(t0 + ms(4000)).layer_names().iter().any(|n| n.starts_with("full/")));
 }
 
+fn sleep_manifest() -> Manifest {
+    let mut m = test_manifest();
+    m.scenes = toml::from_str::<toml::Table>(
+        r#"
+[[scene]]
+name = "sleep"
+trigger = "idle"
+duration_ms = 0
+
+[scene.breathe]
+period_ms = 4000
+pt = 2.0
+
+[[scene.step]]
+frame = "full/gesture"
+ms = 1000
+blend_ms = 200
+
+[[scene.step]]
+frame = "head/excited"
+ms = 500
+
+[[scene.fx]]
+layer = "fx/sunglasses"
+kind = "pulse"
+anchor = [100, 120]
+period_ms = 1000
+scale = [0.5, 1.0]
+on = ["full/gesture"]
+
+[[scene.fx]]
+layer = "fx/sunglasses"
+kind = "float"
+anchor = [10, 20]
+period_ms = 1000
+rise_pt = 10
+"#,
+    )
+    .unwrap()["scene"]
+        .clone()
+        .try_into()
+        .unwrap();
+    // _test 매니페스트는 장면이 없어 idle 이 꺼진 채로 읽히므로 기본 타이밍에서 다시 적용한다
+    m.timing = Timing::default();
+    m.validate().unwrap();
+    m.apply_scenes();
+    m
+}
+
+fn fx_cmds(f: &typing_pet::anim::Frame) -> Vec<&typing_pet::anim::DrawCmd> {
+    f.cmds.iter().filter(|c| matches!(&c.kind, DrawKind::Layer { name } if name.starts_with("fx/"))).collect()
+}
+
+#[test]
+fn idle_scene_with_zero_duration_lasts_until_input() {
+    let m = sleep_manifest();
+    assert_eq!(m.timing.idle_scene_ms, 0);
+    let t0 = Instant::now();
+    let mut p = Pet::new(m.timing.clone(), Keys::default(), t0);
+    p.on_input(Input::Key(0), t0);
+    assert_eq!(st(&mut p, t0 + ms(20_000)).pose, Some(Pose::Idle));
+    assert_eq!(st(&mut p, t0 + ms(600_000)).pose, Some(Pose::Idle), "입력 전까지 계속");
+    p.on_input(Input::Key(0), t0 + ms(600_001));
+    assert_eq!(st(&mut p, t0 + ms(600_001)).pose, None);
+    // 0 은 idle 장면에만 쓸 수 있다
+    let mut bad = m.clone();
+    bad.scenes[0].trigger = Pose::Milestone;
+    assert!(bad.validate().is_err());
+    let mut bad = m;
+    bad.scenes[0].steps[0].blend_ms = 5000;
+    assert!(bad.validate().is_err(), "blend_ms 가 단계보다 길면 안 됨");
+}
+
+#[test]
+fn scene_steps_blend_into_next_frame() {
+    let m = sleep_manifest();
+    let t0 = Instant::now();
+    let mut a = Animator::new(&m, 240.0, t0);
+    a.update(PetState { pose: Some(Pose::Idle), ..Default::default() }, &[], t0);
+    let mut first = |t: u64| a.frame(t0 + ms(t)).cmds[0].kind.clone();
+    assert_eq!(first(500), DrawKind::Layer { name: "full/gesture".into() });
+    // 첫 단계 끝 200ms 동안 다음 프레임으로 섞는다
+    match first(900) {
+        DrawKind::Mix { a, b, t } => {
+            assert_eq!((a.as_str(), b.as_str()), ("full/gesture", "head/excited"));
+            assert!(t > 0.0 && t < 1.0, "블렌드 중간 {t}");
+        }
+        k => panic!("블렌드가 아님: {k:?}"),
+    }
+    assert_eq!(first(1200), DrawKind::Layer { name: "head/excited".into() });
+    // 둘째 단계는 블렌드가 없어 한 번에 넘어가고 반복한다 (주기 1500ms)
+    assert_eq!(first(1499), DrawKind::Layer { name: "head/excited".into() });
+    assert_eq!(first(1600), DrawKind::Layer { name: "full/gesture".into() });
+    assert_eq!(a.full_layer(t0 + ms(1600)), Some("full/gesture"));
+    // 숨쉬기/소품이 있으면 breathe_fps 로 계속 다시 그린다
+    let now = t0 + ms(100_000);
+    assert!(a.next_redraw(now).is_some_and(|t| t <= now + ms(34)));
+}
+
+#[test]
+fn scene_breathe_and_fx_move() {
+    let m = sleep_manifest();
+    let t0 = Instant::now();
+    let mut a = Animator::new(&m, 240.0, t0);
+    a.update(PetState { pose: Some(Pose::Idle), ..Default::default() }, &[], t0);
+    // 숨쉬기: 머리 마스크 안을 오르내리는 명령이 따로 있다 (1/4 주기에서 가장 높이)
+    let f = a.frame(t0 + ms(1000));
+    let head = f.cmds.iter().find(|c| c.mask.as_deref() == Some("mask/head")).expect("숨쉬기 명령");
+    assert!(head.offset[1] < 0.0, "위로 {:?}", head.offset);
+    let f = a.frame(t0 + ms(3000));
+    let head = f.cmds.iter().find(|c| c.mask.as_deref() == Some("mask/head")).unwrap();
+    assert!(head.offset[1] > 0.0, "아래로 {:?}", head.offset);
+    // pulse: anchor 를 기준으로 scale 범위 안에서 커졌다 작아진다 (장면이 나타나는 페이드 뒤부터 본다)
+    let scales: Vec<f32> = (3..10).map(|i| fx_cmds(&a.frame(t0 + ms(i * 100)))[0].scale).collect();
+    let (lo, hi) = scales.iter().fold((f32::MAX, f32::MIN), |(l, h), &s| (l.min(s), h.max(s)));
+    assert!(lo >= 0.5 - 1e-3 && hi <= 1.0 + 1e-3 && hi - lo > 0.3, "pulse 배율 {scales:?}");
+    assert_eq!(fx_cmds(&a.frame(t0 + ms(100)))[0].anchor, [100.0, 120.0]);
+    // float: 위로 떠오르고 주기 끝에서 사라진다
+    let mut fl = |t: u64| fx_cmds(&a.frame(t0 + ms(t))).into_iter().find(|c| c.anchor == [10.0, 20.0]).cloned();
+    let (early, late) = (fl(300).unwrap(), fl(550).unwrap());
+    assert!(late.offset[1] < early.offset[1], "떠오름 {:?} -> {:?}", early.offset, late.offset);
+    assert!(fl(999).is_none_or(|c| c.opacity < 0.05));
+    // on: pulse 는 full/gesture 단계에서만 보인다 (head/excited 단계에선 float 만)
+    let f = a.frame(t0 + ms(1300));
+    assert_eq!(fx_cmds(&f).len(), 1);
+    assert_eq!(fx_cmds(&f)[0].anchor, [10.0, 20.0]);
+}
+
+#[test]
+fn render_scenarios_reach_their_scene() {
+    let m = sleep_manifest();
+    let t0 = Instant::now();
+    let mut p = Pet::new(m.timing.clone(), Keys::default(), t0);
+    for (t, i) in typing_pet::scenario_inputs("idle").unwrap() {
+        p.on_input(i, t0 + ms(t));
+    }
+    assert_eq!(st(&mut p, t0 + ms(25_000)).pose, Some(Pose::Idle));
+    let mut p = Pet::new(Timing::default(), Keys::default(), t0);
+    let mut hit = false;
+    for (t, i) in typing_pet::scenario_inputs("milestone").unwrap() {
+        p.on_input(i, t0 + ms(t));
+        hit |= st(&mut p, t0 + ms(t)).pose == Some(Pose::Milestone);
+    }
+    assert!(hit, "milestone 장면이 나와야 함");
+    assert!(typing_pet::scenario_inputs("nope").is_none());
+}
+
 #[test]
 fn missing_layers_fall_back_to_existing_ones() {
     let have: BTreeSet<String> = ["base", "head/normal", "paw_l/up", "paw_r/up", "paw_r/down"].iter().map(|s| s.to_string()).collect();
