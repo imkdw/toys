@@ -49,6 +49,19 @@ else
   record "1층 단위/무작위 테스트" PASS "${n}개 통과"
 fi
 
+# ---------- 캐릭터 고유 행동 규칙 (docs/CHARACTER_BEHAVIOR_PLAN.md 5.2) ----------
+# _ 로 시작하지 않는 모든 캐릭터: 장면 cue 마다 behavior, 그 밖 cue 에 3개 이상, 절반 이상 움직임, 다른 캐릭터와 겹치지 않음
+for d in characters/*/; do
+  c="$(basename "$d")"
+  [[ "$c" == _* || ! -f "$d/manifest.toml" ]] && continue
+  if out=$("$APP" --check "characters/$c" 2>&1); then
+    record "고유 행동 ($c)" PASS "$(echo "$out" | head -1)"
+  else
+    echo "$out" >"$OUT/check_$c.log"
+    record "고유 행동 ($c)" FAIL "$(echo "$out" | grep -c '^  - ')개 규칙 위반: $OUT/check_$c.log"
+  fi
+done
+
 # ---------- 3층: 오프스크린 조합 시트 + 기준 이미지 ----------
 chars=("_test")
 # 실제 캐릭터: characters/ 아래 manifest.toml 이 있고 _ 로 시작하지 않는 폴더 전부 (usagi 를 맨 뒤에 두어 --live 기본값으로)

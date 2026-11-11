@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::pet::Pose;
+use crate::pet::{Cue, Pose};
 
 /// 사용자 설정. `~/Library/Application Support/typing-pet/config.toml` 에 저장.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -20,11 +20,13 @@ pub struct Config {
     pub visible: bool,
     /// 가만히 있을 때 머리를 아주 천천히 위아래로.
     pub breathing: bool,
+    /// 반응 줄이기: 장면(idle, milestone, gesture) 밖의 캐릭터 행동을 끈다.
+    pub calm: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { character: None, position: None, size: 240.0, visible: true, breathing: true }
+        Self { character: None, position: None, size: 240.0, visible: true, breathing: true, calm: false }
     }
 }
 
@@ -98,8 +100,15 @@ pub struct Manifest {
     #[serde(default)]
     pub swing: Option<Swing>,
     /// 애니 장면 연출 (`[[scene]]`). 발동 조건별로 여러 개면 돌아가며 쓴다.
+    /// 읽을 때 `layer_mode = "full"` 인 behavior 로 바꿔 쓴다 ([`Manifest::all_behaviors`]).
     #[serde(default, rename = "scene")]
     pub scenes: Vec<Scene>,
+    /// 캐릭터 고유 행동 (`[[behavior]]`). 엔진이 알린 cue 에 어떻게 반응할지.
+    #[serde(default, rename = "behavior")]
+    pub behaviors: Vec<Behavior>,
+    /// 몸 전체 움직임(hop, squash 등)의 기준점 (캔버스 px). 보통 엉덩이 아래 가운데. 없으면 머리 기준점 아래.
+    #[serde(default)]
+    pub body_anchor: Option<[f32; 2]>,
     #[serde(default)]
     pub timing: Timing,
     #[serde(default)]
@@ -207,6 +216,19 @@ pub enum FxKind {
     Float,
     /// anchor 를 기준으로 커졌다 작아진다 (콧방울). 숨쉬기 오르내림도 따라간다.
     Pulse,
+    /// delay_ms 뒤 커지며 튀어나와 period_ms 동안 보이다 사라진다 (말풍선). 반복하지 않는다.
+    PopIn,
+    /// anchor 에서 아래로 rise_pt 만큼 떨어지며 사라진다 (눈물, 땀). period_ms 마다 반복.
+    Fall,
+    /// delay_ms 뒤 period_ms 동안 한 번 번쩍 (카메라 플래시). 레이어는 보통 fx/white.
+    Flash,
+}
+
+impl FxKind {
+    /// 한 번만 나오는 종류 (반복하지 않음).
+    pub fn one_shot(self) -> bool {
+        matches!(self, FxKind::PopIn | FxKind::Flash)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -221,7 +243,10 @@ pub struct SceneFx {
     /// 위상 (0~1). 여러 개를 엇갈리게 띄울 때.
     #[serde(default)]
     pub phase: f32,
-    /// float: 한 주기 동안 떠오르는 높이 (pt).
+    /// pop_in/flash: 나타나기 전 기다리는 시간. 다른 종류는 위상처럼 늦게 시작한다.
+    #[serde(default)]
+    pub delay_ms: u64,
+    /// float: 한 주기 동안 떠오르는 높이, fall: 떨어지는 거리 (pt).
     #[serde(default = "SceneFx::default_rise")]
     pub rise_pt: f32,
     /// pulse: 가장 작을 때/클 때 배율.
@@ -243,6 +268,238 @@ impl SceneFx {
         [0.4, 1.0]
     }
 }
+
+/// behavior 를 어디에 그리나.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerMode {
+    /// 평소 합성(앞발/머리) 위에 움직임/소품/머리 바꾸기를 얹는다.
+    Overlay,
+    /// 전체 프레임 장면 (기존 `[[scene]]`).
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum When {
+    /// cue 가 나는 순간 한 번.
+    #[default]
+    Enter,
+    /// 그 상태(level:*, egg)인 동안 duration_ms 재생, cooldown_s 쉬기를 반복. duration_ms 가 없으면 계속.
+    Hold,
+}
+
+/// 캐릭터 고유 행동 하나 (`[[behavior]]`).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Behavior {
+    pub name: String,
+    /// 반응할 cue (`src/pet.rs` [`Cue`]).
+    pub on: Cue,
+    #[serde(default)]
+    pub when: When,
+    /// 0~1. cue 가 날 때 이 확률로만 한다.
+    #[serde(default = "Behavior::default_chance")]
+    pub chance: f32,
+    /// 한 번 한 뒤 이만큼은 다시 하지 않는다. hold 는 재생 사이 쉬는 시간.
+    #[serde(default)]
+    pub cooldown_s: f32,
+    /// 같은 층(full / overlay)에서 겹치면 큰 쪽을 보여 준다. 같으면 나중 것.
+    #[serde(default = "Behavior::default_priority")]
+    pub priority: i32,
+    /// 없으면 frames/step 이 있을 때 full, 아니면 overlay.
+    #[serde(default)]
+    pub layer_mode: Option<LayerMode>,
+    /// 길이. idle/milestone/gesture 의 full 은 timing 값이 기본이고, 나머지는 1200ms.
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    /// full: 프레임 (frame_ms 마다 반복). step 이 있으면 그쪽.
+    #[serde(default)]
+    pub frames: Vec<String>,
+    #[serde(default = "Scene::default_frame_ms")]
+    pub frame_ms: u64,
+    #[serde(default, rename = "step")]
+    pub steps: Vec<Step>,
+    /// full: 머리 마스크 안 숨쉬기.
+    #[serde(default)]
+    pub breathe: Option<Breathe>,
+    #[serde(default)]
+    pub fx: Vec<SceneFx>,
+    #[serde(default)]
+    pub motion: Vec<Motion>,
+    /// overlay: 머리 레이어를 잠깐 바꾼다.
+    #[serde(default)]
+    pub head: Option<HeadSwap>,
+}
+
+impl Behavior {
+    fn default_chance() -> f32 {
+        1.0
+    }
+    fn default_priority() -> i32 {
+        10
+    }
+    pub const DEFAULT_MS: u64 = 1200;
+
+    pub fn mode(&self) -> LayerMode {
+        self.layer_mode.unwrap_or(if self.frames.is_empty() && self.steps.is_empty() { LayerMode::Overlay } else { LayerMode::Full })
+    }
+
+    /// 재생 순서. step 이 없으면 frames 를 frame_ms 마다.
+    pub fn timeline(&self) -> Vec<Step> {
+        if !self.steps.is_empty() {
+            return self.steps.clone();
+        }
+        self.frames.iter().map(|f| Step { frame: f.clone(), ms: self.frame_ms, blend_ms: 0 }).collect()
+    }
+
+    /// 이 behavior 가 쓰는 레이어 이름들.
+    pub fn layer_names(&self) -> Vec<&str> {
+        self.frames
+            .iter()
+            .map(|s| s.as_str())
+            .chain(self.steps.iter().map(|s| s.frame.as_str()))
+            .chain(self.fx.iter().map(|f| f.layer.as_str()))
+            .chain(self.head.iter().flat_map(|h| h.frames()))
+            .collect()
+    }
+
+    /// 2장 교대만 하는 게 아니라 실제로 움직이는가 (motion, 소품, 숨쉬기, 크로스페이드).
+    pub fn moves(&self) -> bool {
+        !self.motion.is_empty() || !self.fx.is_empty() || self.breathe.is_some() || self.steps.iter().any(|s| s.blend_ms > 0)
+    }
+
+    /// 기존 `[[scene]]` 을 full behavior 로.
+    pub fn from_scene(sc: &Scene) -> Self {
+        Self {
+            name: sc.name.clone(),
+            on: Cue::of_pose(sc.trigger),
+            when: When::Enter,
+            chance: 1.0,
+            cooldown_s: 0.0,
+            priority: Self::default_priority(),
+            layer_mode: Some(LayerMode::Full),
+            duration_ms: sc.duration_ms,
+            frames: sc.frames.clone(),
+            frame_ms: sc.frame_ms,
+            steps: sc.steps.clone(),
+            breathe: sc.breathe.clone(),
+            fx: sc.fx.clone(),
+            motion: Vec::new(),
+            head: None,
+        }
+    }
+}
+
+/// 움직임 도구. 모두 시간 함수라 프레임 수와 무관하다.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionKind {
+    /// 위로 튀었다 내려오고 착지 때 살짝 납작해진다. pt = 높이.
+    Hop,
+    /// 가로로 작고 빠르게 떤다. pt = 진폭.
+    Tremble,
+    /// 좌우로 천천히 오간다. pt = 진폭.
+    Sway,
+    /// 아래로 끄덕였다 돌아온다. pt = 깊이.
+    Nod,
+    /// 기준점에서 세로로 줄고 가로로 늘었다 돌아온다. squash = 줄어드는 비율.
+    Squash,
+}
+
+impl MotionKind {
+    fn defaults(self) -> (f32, u64) {
+        match self {
+            MotionKind::Hop => (6.0, 450),
+            MotionKind::Tremble => (1.2, 70),
+            MotionKind::Sway => (2.5, 1200),
+            MotionKind::Nod => (3.0, 500),
+            MotionKind::Squash => (0.0, 300),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionTarget {
+    /// 캐릭터 전체 (mask/body 안). 책상/키보드는 제자리.
+    Body,
+    /// 머리 마스크 안.
+    Head,
+    /// 이 behavior 의 소품 하나 (fx 의 순서).
+    Fx(usize),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Motion {
+    /// body | head | fx:<레이어 이름> (예: fx:fx/ura 또는 fx:ura).
+    pub target: String,
+    pub kind: MotionKind,
+    /// 폭 (pt). 없으면 종류별 기본값.
+    #[serde(default)]
+    pub pt: Option<f32>,
+    /// 한 번 하는 데 걸리는 시간. 없으면 종류별 기본값.
+    #[serde(default)]
+    pub period_ms: Option<u64>,
+    /// 몇 번 할지. 0 이면 behavior 가 끝날 때까지 반복.
+    #[serde(default)]
+    pub count: u32,
+    #[serde(default)]
+    pub delay_ms: u64,
+    /// hop 착지/squash 때 세로로 줄어드는 비율.
+    #[serde(default = "Motion::default_squash")]
+    pub squash: f32,
+}
+
+impl Motion {
+    fn default_squash() -> f32 {
+        0.05
+    }
+    pub fn amp(&self) -> f32 {
+        self.pt.unwrap_or(self.kind.defaults().0)
+    }
+    pub fn period(&self) -> u64 {
+        self.period_ms.unwrap_or(self.kind.defaults().1).max(1)
+    }
+    /// 대상 해석. fx 는 behavior 의 fx 목록 안에서 찾는다.
+    pub fn resolve_target(&self, fx: &[SceneFx]) -> Option<MotionTarget> {
+        match self.target.as_str() {
+            "body" => Some(MotionTarget::Body),
+            "head" => Some(MotionTarget::Head),
+            t => {
+                let name = t.strip_prefix("fx:")?;
+                let full = if name.starts_with("fx/") { name.to_string() } else { format!("fx/{name}") };
+                fx.iter().position(|f| f.layer == full).map(MotionTarget::Fx)
+            }
+        }
+    }
+}
+
+/// overlay 동안 머리 레이어를 바꾼다. `layer` 한 장 또는 `frames` 를 frame_ms 마다.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct HeadSwap {
+    #[serde(default)]
+    pub layer: Option<String>,
+    #[serde(default)]
+    pub frames: Vec<String>,
+    #[serde(default = "HeadSwap::default_frame_ms")]
+    pub frame_ms: u64,
+}
+
+impl HeadSwap {
+    fn default_frame_ms() -> u64 {
+        150
+    }
+    pub fn frames(&self) -> Vec<&str> {
+        self.layer.iter().map(|s| s.as_str()).chain(self.frames.iter().map(|s| s.as_str())).collect()
+    }
+}
+
+/// `validate_character` 의 숫자 (계획 5.2).
+pub const MIN_BASIC_PER_CUE: usize = 1;
+pub const MIN_EXTRA_BEHAVIORS: usize = 3;
+pub const MIN_AMBIENT_S: u64 = 60;
 
 /// 상태 머신 타이밍 (PLAN 5.3).
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -270,6 +527,13 @@ pub struct Timing {
     pub milestone_ms: u64,
     pub sunglasses_ms: u64,
     pub easter_egg_repeat: u32,
+    /// 이만큼 쉬다가 입력하면 wake cue (0 이면 끔).
+    pub wake_after_s: u64,
+    /// burst_window_ms 안에 burst_keys 번 치면 burst cue (burst_keys = 0 이면 끔).
+    pub burst_window_ms: u64,
+    pub burst_keys: u32,
+    /// ambient cue 간격 범위 (초). 두 값 사이 무작위. 뒤 값이 0 이면 끔.
+    pub ambient_every_s: [u64; 2],
 }
 
 impl Default for Timing {
@@ -293,6 +557,10 @@ impl Default for Timing {
             milestone_ms: 2500,
             sunglasses_ms: 30_000,
             easter_egg_repeat: 10,
+            wake_after_s: 15,
+            burst_window_ms: 1000,
+            burst_keys: 9,
+            ambient_every_s: [60, 180],
         }
     }
 }
@@ -481,24 +749,167 @@ impl Manifest {
                 return Err(format!("장면 {} 의 period_ms 는 0 보다 커야 함", sc.name));
             }
         }
+        for b in &self.behaviors {
+            self.validate_behavior(b).map_err(|e| format!("behavior {}: {e}", b.name))?;
+        }
+        let [lo, hi] = t.ambient_every_s;
+        if hi > 0 && lo > hi {
+            return Err("ambient_every_s 는 [작은 값, 큰 값] 이어야 함".into());
+        }
         Ok(())
     }
 
-    /// 장면이 없는 발동 조건(idle, milestone)은 끄고, 장면 길이를 타이밍에 반영한다.
+    fn validate_behavior(&self, b: &Behavior) -> Result<(), String> {
+        if let Some(f) = b.layer_names().into_iter().find(|f| !self.layers.iter().any(|l| l == f)) {
+            return Err(format!("레이어 {f:?} 이 layers 에 없음"));
+        }
+        if !(0.0..=1.0).contains(&b.chance) || !b.cooldown_s.is_finite() || b.cooldown_s < 0.0 {
+            return Err("chance 는 0~1, cooldown_s 는 0 이상".into());
+        }
+        if b.when == When::Hold && !b.on.can_hold() {
+            return Err(format!("when = \"hold\" 는 level:*, egg cue 만 쓸 수 있음 ({})", b.on));
+        }
+        if b.duration_ms == Some(0) && !(b.on == Cue::Idle || b.when == When::Hold) {
+            return Err("duration_ms = 0 (끝없이)은 idle 과 hold 만 쓸 수 있음".into());
+        }
+        let tl = b.timeline();
+        match b.mode() {
+            LayerMode::Full => {
+                if tl.is_empty() {
+                    return Err("full 인데 frames 나 step 이 없음".into());
+                }
+                if b.head.is_some() {
+                    return Err("head 바꾸기는 overlay 만 쓸 수 있음".into());
+                }
+            }
+            LayerMode::Overlay => {
+                if !tl.is_empty() || b.breathe.is_some() {
+                    return Err("overlay 에는 frames/step/breathe 를 쓸 수 없음 (layer_mode = \"full\" 로)".into());
+                }
+                if b.motion.is_empty() && b.fx.is_empty() && b.head.is_none() {
+                    return Err("overlay 인데 motion/fx/head 가 하나도 없음".into());
+                }
+            }
+        }
+        if tl.iter().any(|s| s.ms == 0 || s.blend_ms > s.ms) {
+            return Err("단계 길이는 0 보다 크고 blend_ms 이상이어야 함".into());
+        }
+        if b.breathe.as_ref().is_some_and(|x| x.period_ms == 0) || b.fx.iter().any(|f| f.period_ms == 0) {
+            return Err("period_ms 는 0 보다 커야 함".into());
+        }
+        if b.fx.iter().any(|f| f.layer.is_empty()) {
+            return Err("fx 에 layer 가 없음".into());
+        }
+        for m in &b.motion {
+            if m.resolve_target(&b.fx).is_none() {
+                return Err(format!("motion target {:?} 을 모름 (body, head, fx:<이 behavior 의 fx 레이어>)", m.target));
+            }
+            if m.amp() < 0.0 || !m.amp().is_finite() || !(0.0..0.5).contains(&m.squash) {
+                return Err(format!("motion {:?}: pt 는 0 이상, squash 는 0~0.5", m.kind));
+            }
+        }
+        if let Some(h) = &b.head {
+            if h.frames().is_empty() || h.frame_ms == 0 {
+                return Err("head 에 layer 나 frames 가 없음".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// 명시한 `[[behavior]]` 와 `[[scene]]` 을 바꾼 것 전부. scene 이 먼저 (기존 순서 유지).
+    pub fn all_behaviors(&self) -> Vec<Behavior> {
+        self.scenes.iter().map(Behavior::from_scene).chain(self.behaviors.iter().cloned()).collect()
+    }
+
+    /// behavior 가 없는 장면 cue(idle, milestone)는 끄고, 첫 full behavior 길이를 타이밍에 반영한다.
     pub fn apply_scenes(&mut self) {
-        let first = |p: Pose| self.scenes.iter().find(|s| s.trigger == p).map(|s| s.duration_ms);
+        let all = self.all_behaviors();
+        let any = |c: Cue| all.iter().any(|b| b.on == c);
+        let first = |c: Cue| all.iter().find(|b| b.on == c && b.mode() == LayerMode::Full).and_then(|b| b.duration_ms);
         let t = &mut self.timing;
-        match first(Pose::Idle) {
-            None => t.idle_scene_s = 0,
-            Some(d) => t.idle_scene_ms = d.unwrap_or(t.idle_scene_ms),
+        if !any(Cue::Idle) {
+            t.idle_scene_s = 0;
+        } else if let Some(d) = first(Cue::Idle) {
+            t.idle_scene_ms = d;
         }
-        match first(Pose::Milestone) {
-            None => t.milestone_keys = 0,
-            Some(d) => t.milestone_ms = d.unwrap_or(t.milestone_ms),
+        if !any(Cue::Milestone) {
+            t.milestone_keys = 0;
+        } else if let Some(d) = first(Cue::Milestone) {
+            t.milestone_ms = d;
         }
-        if let Some(Some(d)) = first(Pose::Gesture) {
+        if let Some(d) = first(Cue::Gesture) {
             t.gesture_ms = d;
         }
+    }
+
+    /// 새 캐릭터 규칙 (계획 5.2). 고유 행동이 모자라면 이유를 돌려준다 (비면 통과).
+    /// `others` 는 비교할 다른 캐릭터들 (behavior 이름, 레이어 파일이 겹치면 안 됨).
+    pub fn validate_character(&self, others: &[Manifest]) -> Vec<String> {
+        let mut errs = Vec::new();
+        if let Err(e) = self.validate() {
+            errs.push(e);
+        }
+        let all = self.all_behaviors();
+        for c in [Cue::Idle, Cue::Milestone, Cue::Gesture] {
+            let n = all.iter().filter(|b| b.on == c).count();
+            if n < MIN_BASIC_PER_CUE {
+                errs.push(format!("{c} cue 에 behavior 가 {n}개 (최소 {MIN_BASIC_PER_CUE}개)"));
+            }
+        }
+        let extra = all.iter().filter(|b| b.on.pose().is_none()).count();
+        if extra < MIN_EXTRA_BEHAVIORS {
+            errs.push(format!("idle/milestone/gesture 밖의 cue (wake, burst, level:*, egg, ambient, key:*) 에 behavior 가 {extra}개 (최소 {MIN_EXTRA_BEHAVIORS}개)"));
+        }
+        let moving = all.iter().filter(|b| b.moves()).count();
+        if moving * 2 < all.len() {
+            errs.push(format!("움직임(motion/fx/숨쉬기/크로스페이드)이 있는 behavior 가 {moving}/{}개 (절반 이상이어야 함)", all.len()));
+        }
+        let [_, hi] = self.timing.ambient_every_s;
+        if hi > 0 && self.timing.ambient_every_s[0] < MIN_AMBIENT_S {
+            errs.push(format!("ambient_every_s 최소 간격은 {MIN_AMBIENT_S}초 이상 (너무 자주 나오면 시끄러움)"));
+        }
+        let mine: BTreeSet<&str> = all.iter().map(|b| b.name.as_str()).collect();
+        let my_hashes = self.behavior_layer_hashes();
+        for o in others {
+            let theirs: BTreeSet<String> = o.all_behaviors().into_iter().map(|b| b.name).collect();
+            let same: Vec<&str> = mine.iter().copied().filter(|n| theirs.contains(*n)).collect();
+            if !same.is_empty() {
+                errs.push(format!("{} 와 behavior 이름이 겹침: {}", o.name, same.join(", ")));
+            }
+            let oh = o.behavior_layer_hashes();
+            for (layer, h) in &my_hashes {
+                if let Some((ol, _)) = oh.iter().find(|(_, x)| x == h) {
+                    errs.push(format!("레이어 {layer} 이 {} 의 {ol} 과 같은 파일", o.name));
+                }
+            }
+        }
+        errs
+    }
+
+    /// behavior 가 쓰는 레이어 파일의 내용 해시 (읽을 수 없는 파일은 뺀다).
+    fn behavior_layer_hashes(&self) -> Vec<(String, u64)> {
+        use std::hash::{Hash, Hasher};
+        let names: BTreeSet<String> = self.all_behaviors().iter().flat_map(|b| b.layer_names().into_iter().map(String::from).collect::<Vec<_>>()).collect();
+        names
+            .into_iter()
+            .filter_map(|n| {
+                let bytes = std::fs::read(self.layer_path(&n)).ok()?;
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                bytes.hash(&mut h);
+                Some((n, h.finish()))
+            })
+            .collect()
+    }
+
+    /// 같은 폴더(characters/)의 다른 실제 캐릭터 (`_` 로 시작하는 폴더와 자기 자신 제외, 못 읽는 것은 건너뜀).
+    pub fn siblings(&self) -> Vec<Manifest> {
+        let Some(root) = self.dir.parent() else { return Vec::new() };
+        let me = self.dir.file_name().map(|n| n.to_owned());
+        Self::available_in(root)
+            .into_iter()
+            .filter(|(n, _)| Some(std::ffi::OsString::from(n)) != me)
+            .filter_map(|(n, _)| Self::load_dir(&root.join(n)).ok())
+            .collect()
     }
 
     pub fn scenes_for(&self, p: Pose) -> Vec<&Scene> {

@@ -4,17 +4,18 @@
 
 ```
 characters/<name>/
-├── manifest.toml   메뉴 이름(title), 레이어 목록, 마스크, 발끝 좌표, 머리 기준점, 마우스 연출 축([swing])
-│                   애니 장면([[scene]])
+├── manifest.toml   메뉴 이름(title), 레이어 목록, 마스크, 발끝 좌표, 머리/몸 기준점, 마우스 연출 축([swing])
+│                   애니 장면([[scene]]), 캐릭터 고유 행동([[behavior]])
 │                   ([timing] [anim] [keys] 로 기본값 덮어쓰기)
 ├── layers/
 │   ├── base.png             책상과 소품까지 포함한 기본 장면
+│   ├── base_clean.png       (선택) 캐릭터를 지운 책상. 몸 전체 움직임으로 드러나는 자리를 채운다
 │   ├── head/*.png           머리 변형 (마스크 안을 교체)
 │   ├── paw_l/*.png          왼앞발 자세
 │   ├── paw_r/*.png          오른앞발 자세 (mouse_bg: 마우스 자세에서 팔을 치운 바탕)
-│   ├── fx/*.png             선글라스 단독, 마우스 잡은 팔(mouse_arm), 장면 소품(bubble, zzz) (일반 합성)
+│   ├── fx/*.png             선글라스 단독, 마우스 잡은 팔(mouse_arm), 장면/행동 소품(bubble, zzz, 말풍선), 플래시(white) (일반 합성)
 │   ├── full/*.png           장면 프레임(full/<장면>_a, _b ..)과 제스처 같은 전체 프레임
-│   └── mask/*.png           head, paw_l, paw_r 영역 마스크
+│   └── mask/*.png           head, paw_l, paw_r 영역 마스크, body(머리+몸통, 앞발/키보드 제외)
 └── baseline/       조합 시트 기준 이미지 (scripts/verify.sh)
 ```
 
@@ -88,10 +89,19 @@ build.sh 의 `art/scripts/extract_fx.py` 가 두 그림의 차이만 잘라 `fx/
 
 | 캐릭터 | idle | milestone | gesture (과열이 식을 때) |
 |---|---|---|---|
-| 우사기 | 책상에서 졸기: 콧방울/Zzz 비렘과 눈 굴리며 중얼대는 렘 반복 (만화 2023-02-06, 2026-09-09) | "야하!" 양팔 번쩍 (e204) | 해골 지팡이 휘두르기 (e036) |
-| 치이카와 | 브로콜리 먹고 감동해서 눈물 (e004) | 제초 검정 5급 합격증 들어 올리기 (e224) | 엉엉 울기 (e224, e185) |
-| 하치와레 | 코스 요리 책 읽기 (e201) | 카메라로 사진 찍기 (e037, e216) | 기타 치며 노래 |
+| 우사기 | 책상에서 졸기: 콧방울/Zzz 비렘과 눈 굴리며 중얼대는 렘 반복 (만화 2023-02-06, 2026-09-09) | "야하!" 양팔 번쩍 + 통통 + 말풍선 (e204) | 해골 지팡이 휘두르며 흔들기 (e036) |
+| 치이카와 | 브로콜리 먹고 감동해서 눈물, 숨쉬기 (e004) | 제초 검정 5급 합격증 들어 올리며 통통 (e060, e224) | 엉엉 울며 부들부들 + 눈물 (e224, e185) |
+| 하치와레 | 코스 요리 책 읽기, 숨쉬기 (e201) | 카메라로 사진 찍기 + 플래시 (e037, e216) | 기타 치며 노래 + 음표, 흔들기 |
 
+장면 밖의 고유 행동 (`[[behavior]]`, 자세한 근거는 `art/<이름>/BEHAVIORS.md`):
+
+| 캐릭터 | 성격 | 행동 (cue) |
+|---|---|---|
+| 우사기 | 시끄럽고 몸이 먼저 나감 | "우라!" 말풍선 + 점프 (level:excited), 프루루루 고속 진동 (level:dizzy 동안), 과열에 들썩 + 볼에서 김 나는 얼굴 (level:overheat), "하아?" (wake), 타자 들썩임 (burst), 귀 쫑긋 (ambient) |
+| 치이카와 | 겁 많고 잘 욺 | "왓!" 깜짝 + 땀방울 (wake), 부들부들 (level:dizzy 동안), 울먹이는 과열 얼굴 + 눈물 (level:overheat), 지우면 움찔 (key:backspace) |
+| 하치와레 | 밝고 낙천적 | "어떻게든 되겠지!" 말풍선 + 땀 흘리며 웃는 과열 얼굴 (level:overheat), 음표 흥얼거리기 (level:excited 동안), 혀 내밀고 웃기 (ambient), 반가워 (wake) |
+
+말풍선 대사는 한국어 더빙 기준이다.
 괄호는 참고한 애니 회차 (`art/<이름>/ref/scene/` 에 크롭). 만드는 법:
 
 1. `art/<이름>/prompts/4x_scene_<장면>_a.txt` (첫 프레임, base 에서 편집), `_b.txt` (둘째 프레임, 고른 첫 프레임에서 편집).
@@ -99,9 +109,93 @@ build.sh 의 `art/scripts/extract_fx.py` 가 두 그림의 차이만 잘라 `fx/
    (`-p` 는 따라 할 장면 캡처. 둘째 프레임은 `-i` 에 고른 첫 프레임을 준다.)
 3. `picks.json` 에 `"full/<장면>_a": "<후보>"` 와 `"_scenes": {"<장면>": {"trigger": "idle", "frame_ms": 450}}` 를 적고 build.sh.
 
-새 캐릭터 추가 순서 (생성 원본, 프롬프트, 마스크는 `art/<이름>/` 에 캐릭터별로 둔다):
+## 캐릭터 고유 행동 ([[behavior]])
 
-1. `art/<이름>/ref/real/` 에 애니 캡처 크롭, `art/<이름>/prompts/` 에 프롬프트 (`art/usagi/prompts` 를 복사해 생김새 부분만 바꾼다).
-2. `art/scripts/gen.sh -c <이름> -i <입력> -r <참고>... -n 4 00_base.txt` 로 base 후보, 고른 뒤 나머지 변형 생성.
-3. `art/<이름>/picks.json` 에 고른 후보와 `_title`(메뉴 이름)을 적고 `art/scripts/build.sh --name <이름>`.
+엔진은 "무슨 일이 일어났는지(cue)" 만 알리고, 어떻게 반응할지는 캐릭터가 `[[behavior]]` 로 정한다. `src/` 에는 캐릭터 이름이 없다.
+`[[scene]]` 은 `layer_mode = "full"` 인 behavior 로 읽히므로 예전 manifest 도 그대로 동작한다.
+
+| cue | 언제 | 조절 ([timing]) |
+|---|---|---|
+| `idle` `milestone` `gesture` | 위 장면과 같음 | `idle_scene_s`, `milestone_keys`, `gesture_cooldown_s` |
+| `level:<normal\|excited\|dizzy\|overheat\|sleepy>` | 머리 단계가 바뀔 때 (`when = "hold"` 면 그 단계인 동안 반복) | `level_up`, `level_down`, `sleepy_s` |
+| `egg` | 선글라스 이스터에그 (hold 가능) | `easter_egg_repeat` |
+| `wake` | 오래 쉬다가 첫 입력 | `wake_after_s` (15) |
+| `burst` | 짧은 시간에 몰아친 키 | `burst_window_ms` (1000), `burst_keys` (9) |
+| `key:<enter\|backspace\|space\|tab\|escape\|delete>` | 그 키를 누를 때 (키 코드만 비교하고 저장하지 않음) | |
+| `ambient` | 평소 상태에서 무작위 간격 (장면 중엔 건너뜀) | `ambient_every_s` ([60, 180]) |
+
+```toml
+[[behavior]]
+name = "ura"
+on = "level:excited"        # cue
+when = "enter"              # enter: 한 번 | hold: 그 상태인 동안 duration_ms 재생, cooldown_s 쉬기를 반복 (level:*, egg 만)
+chance = 1.0                # 0~1
+cooldown_s = 20             # 한 번 한 뒤 다시 하기까지
+priority = 20               # 같은 층(full/overlay)에서 겹치면 큰 쪽, 같으면 나중 것. 기본 10
+layer_mode = "overlay"      # overlay: 평소 합성 위에 얹음 | full: 전체 프레임 (없으면 frames/step 이 있을 때 full)
+duration_ms = 900           # 없으면 1200 (idle/milestone/gesture 의 full 은 [timing] 값)
+
+[[behavior.motion]]
+target = "body"             # body: 몸 마스크 안(책상/앞발은 제자리) | head: 머리 마스크 안 | fx:<소품> (예: fx:ura)
+kind = "hop"                # hop, tremble, sway, nod, squash
+pt = 6                      # 폭 (pt). 없으면 종류별 기본값
+period_ms = 450             # 한 번 하는 시간
+count = 1                   # 0 이면 behavior 가 끝날 때까지 반복 (시작/끝 100ms 는 서서히)
+delay_ms = 0
+squash = 0.05               # hop 착지/squash 의 납작한 정도
+
+[[behavior.fx]]             # 장면 소품과 같은 표 + 종류 추가
+layer = "fx/ura"
+kind = "pop_in"             # float, pulse, pop_in(말풍선), fall(눈물/땀), flash(번쩍)
+anchor = [760, 300]
+period_ms = 800             # pop_in/flash: 보이는 시간 (한 번), 나머지: 한 주기 (반복)
+delay_ms = 0
+scale = [0.3, 1.0]          # pulse: 작을 때/클 때, pop_in: 시작/끝 크기
+rise_pt = 14                # float: 떠오르는 높이, fall: 떨어지는 거리
+
+[behavior.head]             # overlay 동안 머리 바꾸기 (시작/끝은 원래 머리와 크로스페이드)
+layer = "head/haa"          # 또는 frames = ["head/ear_a", "head/ear_b"], frame_ms = 150
+```
+
+- 우선순위: full > overlay > 평소 합성. full 이 보이는 동안 overlay 는 그리지 않는다.
+- 같은 cue 에 behavior 가 여럿이면 chance/cooldown 을 통과한 것 중에서 돌아가며 고른다.
+- 몸 전체 움직임은 `mask/body` 안만 옮기고, `base_clean` 이 있으면 드러나는 자리를 그걸로 채운다. 없으면 이동 폭을 2pt 로 제한한다.
+- 메뉴바 **반응 줄이기** 를 켜면 장면(idle/milestone/gesture) 밖의 behavior 를 하지 않는다.
+
+picks.json 에는 `"_behaviors": {"<이름>": {"on": "...", "motion": [...], "fx": [...], "head": {...}}}` 로 적는다
+(full 인데 frames 가 없으면 `full/<이름>_a, _b ..`). 성격 타이밍은 `"_timing"`, `"_anim"` 으로 `[timing]`, `[anim]` 에 들어간다.
+`"base_clean": "<후보>"` 를 적으면 캐릭터를 지운 책상 레이어가 생기고, behavior 가 `fx/white` 를 쓰면 base 실루엣 모양 흰색이 생긴다.
+
+확인:
+
+- `typing-pet --check characters/<이름>`: 아래 규칙. `scripts/verify.sh` 가 `_` 로 시작하지 않는 모든 캐릭터에 돌린다.
+- `typing-pet --character-dir characters/<이름> --render-all <폴더>`: 조합 시트 + behavior 마다 `bhv-<이름>.png`.
+- `typing-pet --render-timeline <폴더> --scenario <wake|burst|levels|keys|ambient>`: `timeline.json` 의 `started`/`playing` 에 behavior 이름이 남는다
+  (시드 고정이라 같은 시나리오를 캐릭터끼리 비교할 수 있다).
+
+새 캐릭터 규칙 (`--check`, `src/config.rs` `validate_character`):
+
+| 규칙 | 이유 |
+|---|---|
+| `idle`, `milestone`, `gesture` 에 behavior(또는 scene) 가 각각 1개 이상 | 조용히 꺼지는 것 방지 |
+| 그 밖의 cue 에 behavior 3개 이상 | 평소에도 그 캐릭터다운 순간 |
+| 움직임(motion, fx, 숨쉬기, 크로스페이드)이 있는 behavior 가 절반 이상 | 2장 교대만 있는 장면 방지 |
+| 다른 캐릭터와 behavior 이름, 레이어 파일이 겹치지 않음 | 복사해 놓고 이름만 바꾼 캐릭터 방지 |
+| `ambient_every_s` 최소 60초 | 시끄러움 방지 |
+| 쓰는 레이어가 모두 있고 cue 이름 오타 없음 | manifest 검사 |
+
+`_test` 는 이 규칙에서 빠지지만 모든 cue/motion/fx 종류를 쓰는 가짜 behavior(`t_*`)가 있어 엔진 테스트(`tests/behavior.rs`)와 기준 이미지에 쓴다.
+
+## 새 캐릭터 추가 순서
+
+생성 원본, 프롬프트, 마스크는 `art/<이름>/` 에 캐릭터별로 둔다.
+
+1. **행동 시트**: `art/_template/BEHAVIORS.md` 를 `art/<이름>/BEHAVIORS.md` 로 복사해 성격, 대표 동작 6개 이상(참고 회차/프레임 id 포함), cue 연결, 필요한 그림을 적는다.
+   근거 프레임 크롭은 `art/<이름>/ref/behavior/` 에. 프레임 id 가 없는 동작은 넣지 않는다.
+2. `art/<이름>/ref/real/` 에 애니 캡처 크롭, `art/<이름>/prompts/` 에 프롬프트 (`art/usagi/prompts` 를 복사해 생김새 부분만 바꾸되,
+   머리 단계 `2x_*.txt` 는 행동 시트의 "머리 단계" 표대로 캐릭터 성격에 맞게 새로 쓴다). 행동 그림은 `6x_behavior_<이름>.txt`.
+3. `art/scripts/gen.sh -c <이름> -i <입력> -r <참고>... -n 4 00_base.txt` 로 base 후보, 고른 뒤 나머지 변형과 행동 그림 생성 (`-p` 로 근거 장면 첨부).
+4. `art/<이름>/picks.json` 에 고른 후보, `_title`(메뉴 이름), `_scenes`/`_behaviors`, `_timing`/`_anim` 을 적고 `art/scripts/build.sh --name <이름>`.
+5. `typing-pet --check characters/<이름>` 통과, `--render-all` 시트와 `--render-timeline` 로 눈으로 확인.
+
 `_test` 는 색 도형으로 만든 검증용 가짜 세트다 (`art/scripts/make_test_layers.py`).

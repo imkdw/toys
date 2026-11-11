@@ -2,13 +2,13 @@
 //!
 //! 렌더러는 [`Animator::frame`] 이 만든 [`Frame`] 값을 그대로 그린다. 테스트는 이 값을 비교한다 (GPU 불필요).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Anim, Breathe, FxKind, Manifest, Scene, SceneFx, Step, Swing};
-use crate::pet::{Head, PawL, PawR, PetEvent, PetState, Pose};
+use crate::config::{Anim, Behavior, Breathe, FxKind, LayerMode, Manifest, Motion, MotionKind, MotionTarget, SceneFx, Step, Swing, When};
+use crate::pet::{Cue, Head, PawL, PawR, PetEvent, PetState, Pose};
 
 // ---------- 이징 ----------
 
@@ -63,6 +63,9 @@ pub struct DrawCmd {
     /// 캔버스 px 이동.
     pub offset: [f32; 2],
     pub scale: f32,
+    /// 가로/세로 배율 (scale 에 곱함). squash 같은 납작해지는 움직임.
+    #[serde(default = "unit2", skip_serializing_if = "is_unit2")]
+    pub squash: [f32; 2],
     /// 확대 기준점 (캔버스 px).
     pub anchor: [f32; 2],
     /// 영역 마스크 레이어. 있으면 마스크 안을 이 레이어로 교체, 없으면 일반 over 합성.
@@ -82,6 +85,14 @@ pub struct Warp {
     pub d: [f32; 2],
 }
 
+fn unit2() -> [f32; 2] {
+    [1.0; 2]
+}
+
+fn is_unit2(v: &[f32; 2]) -> bool {
+    *v == [1.0; 2]
+}
+
 impl DrawCmd {
     fn layer(name: &str) -> Self {
         Self {
@@ -89,6 +100,7 @@ impl DrawCmd {
             opacity: 1.0,
             offset: [0.0; 2],
             scale: 1.0,
+            squash: [1.0; 2],
             anchor: [0.0; 2],
             mask: None,
             warp: None,
@@ -155,6 +167,154 @@ impl Layers {
     }
 }
 
+// ---------- 변환 (움직임 도구) ----------
+
+/// `p -> anchor + (p - anchor) * s + offset` (캔버스 px). 그리기 명령의 위치/배율과 같은 꼴.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Xf {
+    pub anchor: [f32; 2],
+    pub offset: [f32; 2],
+    pub s: [f32; 2],
+}
+
+impl Xf {
+    pub fn identity(anchor: [f32; 2]) -> Self {
+        Self { anchor, offset: [0.0; 2], s: [1.0; 2] }
+    }
+    pub fn is_identity(&self) -> bool {
+        self.offset == [0.0; 2] && self.s == [1.0; 2]
+    }
+    /// 먼저 `inner`, 그다음 `self` 를 적용한 변환 (기준점은 inner 의 것).
+    pub fn then_of(&self, inner: &Xf) -> Xf {
+        let (o, i) = (self, inner);
+        let mut r = Xf { anchor: i.anchor, offset: [0.0; 2], s: [i.s[0] * o.s[0], i.s[1] * o.s[1]] };
+        for k in 0..2 {
+            r.offset[k] = o.anchor[k] + (i.anchor[k] - o.anchor[k]) * o.s[k] + i.offset[k] * o.s[k] + o.offset[k] - i.anchor[k];
+        }
+        r
+    }
+    /// 그리기 명령에 덧씌운다.
+    pub fn apply(&self, c: &mut DrawCmd) {
+        if self.is_identity() {
+            return;
+        }
+        let inner = Xf { anchor: c.anchor, offset: c.offset, s: [c.scale * c.squash[0], c.scale * c.squash[1]] };
+        let r = self.then_of(&inner);
+        c.anchor = r.anchor;
+        c.offset = r.offset;
+        if (r.s[0] - r.s[1]).abs() < 1e-6 {
+            c.scale = r.s[0];
+            c.squash = [1.0; 2];
+        } else {
+            c.scale = 1.0;
+            c.squash = r.s;
+        }
+    }
+    fn clamp_offset(mut self, max: f32) -> Self {
+        for v in &mut self.offset {
+            *v = v.clamp(-max, max);
+        }
+        self
+    }
+}
+
+/// 0 -> 1 로 `ms` 동안 올라가는 가장자리 (반복 움직임이 뚝 끊기지 않게).
+fn edge(t: f32, ms: f32) -> f32 {
+    ease_in_out(t / ms)
+}
+
+/// `target` 에 걸린 움직임들의 합. `lt` 는 behavior 안 경과 ms, `len` 은 behavior 길이 (모르면 None).
+pub fn motion_xf(motions: &[Motion], fx: &[SceneFx], target: MotionTarget, lt: f32, len: Option<f32>, anchor: [f32; 2], px_per_pt: f32) -> Xf {
+    use std::f32::consts::PI;
+    let mut x = Xf::identity(anchor);
+    for m in motions.iter().filter(|m| m.resolve_target(fx) == Some(target)) {
+        let t = lt - m.delay_ms as f32;
+        let p = m.period() as f32;
+        if t < 0.0 || (m.count > 0 && t >= m.count as f32 * p) {
+            continue;
+        }
+        let u = fract(t / p);
+        // 끝없이 반복하는 움직임은 시작과 끝 100ms 동안 서서히
+        let env = if m.count == 0 { edge(t, 100.0) * len.map_or(1.0, |l| edge(l - lt, 100.0)) } else { 1.0 };
+        let a = m.amp() * px_per_pt * env;
+        let (mut dx, mut dy, mut k) = (0.0, 0.0, 0.0);
+        match m.kind {
+            MotionKind::Hop => {
+                if u < 0.75 {
+                    dy = -a * (PI * u / 0.75).sin();
+                } else {
+                    k = (PI * (u - 0.75) / 0.25).sin() * env;
+                }
+            }
+            MotionKind::Tremble => {
+                // 두 주파수를 섞어 기계적이지 않게 (합은 진폭 안)
+                dx = a * (0.7 * (2.0 * PI * u).sin() + 0.3 * (2.0 * PI * 2.3 * t / p).sin());
+            }
+            MotionKind::Sway => dx = a * (2.0 * PI * u).sin(),
+            MotionKind::Nod => dy = a * (PI * u).sin(),
+            MotionKind::Squash => k = (PI * u).sin() * env,
+        }
+        x.offset[0] += dx;
+        x.offset[1] += dy;
+        if k != 0.0 {
+            x.s[0] *= 1.0 + m.squash * k;
+            x.s[1] *= 1.0 - m.squash * k;
+        }
+    }
+    x
+}
+
+/// 소품 하나의 그리기 명령. `el` 은 장면/behavior 안 경과 ms, `w` 는 보이는 정도, `bob` 은 숨쉬기 오르내림 (px).
+fn fx_cmd(x: &SceneFx, el: f32, w: f32, bob: f32, pt: f32) -> Option<DrawCmd> {
+    if w <= 0.0 {
+        return None;
+    }
+    let t = el - x.delay_ms as f32;
+    if t < 0.0 {
+        return None;
+    }
+    let period = x.period_ms.max(1) as f32;
+    let u = fract(t / period + x.phase);
+    let mut c = DrawCmd::layer(&x.layer);
+    c.anchor = x.anchor;
+    match x.kind {
+        FxKind::Float => {
+            // 아래에서 나타나 떠오르며 살짝 흔들리다 사라진다
+            let fade = ease_in_out(u / 0.25) * (1.0 - ease_in_out((u - 0.6) / 0.4));
+            c.opacity = w * fade;
+            c.offset = [(u * std::f32::consts::TAU).sin() * 2.0 * pt, -u * x.rise_pt * pt];
+            c.scale = 0.85 + 0.3 * u;
+        }
+        FxKind::Pulse => {
+            let k = 0.5 + 0.5 * (u * std::f32::consts::TAU).sin();
+            c.opacity = w;
+            c.offset = [0.0, bob];
+            c.scale = x.scale[0] + (x.scale[1] - x.scale[0]) * k;
+        }
+        FxKind::Fall => {
+            // 맺혔다가 점점 빨리 떨어지며 사라진다
+            let fall = ((u - 0.2) / 0.8).clamp(0.0, 1.0);
+            c.opacity = w * ease_in_out(u / 0.15) * (1.0 - ease_in_out((u - 0.6) / 0.4));
+            c.offset = [0.0, fall * fall * x.rise_pt * pt];
+        }
+        FxKind::PopIn => {
+            if t >= period {
+                return None;
+            }
+            let fade_out = 1.0 - ease_in_out((t - (period - 200.0).max(0.0)) / 200.0_f32.min(period));
+            c.opacity = w * ease_in_out(t / 80.0) * fade_out;
+            c.scale = (x.scale[0] + (x.scale[1] - x.scale[0]) * ease_out_back(t / 220.0)).max(0.01);
+        }
+        FxKind::Flash => {
+            if t >= period {
+                return None;
+            }
+            c.opacity = w * bump(t / period);
+        }
+    }
+    (c.opacity > 0.0).then_some(c)
+}
+
 // ---------- 애니메이터 ----------
 
 #[derive(Debug, Clone)]
@@ -169,12 +329,11 @@ struct Glow {
     start: Instant,
 }
 
-/// 지금 재생 중인 전체 프레임 연출 (장면 단계 반복, 또는 한 장).
+/// 전체 프레임 재생기 (장면 단계 반복, 또는 한 장). 시간은 장면 안 경과 ms.
 #[derive(Debug, Clone)]
 struct Full {
     steps: Vec<Step>,
     cycle: u64,
-    start: Instant,
     breathe: Option<Breathe>,
     fx: Vec<SceneFx>,
 }
@@ -184,16 +343,13 @@ fn fract(x: f32) -> f32 {
 }
 
 impl Full {
-    fn new(steps: Vec<Step>, start: Instant) -> Self {
+    fn new(steps: Vec<Step>) -> Self {
         let cycle = steps.iter().map(|s| s.ms.max(1)).sum::<u64>().max(1);
-        Self { steps, cycle, start, breathe: None, fx: Vec::new() }
-    }
-    fn el_ms(&self, now: Instant) -> u64 {
-        now.saturating_duration_since(self.start).as_millis() as u64
+        Self { steps, cycle, breathe: None, fx: Vec::new() }
     }
     /// (지금 단계, 다음 단계로 블렌드 진행 0~1, 지금 단계 안에서 지난 ms).
-    fn pos(&self, now: Instant) -> (usize, f32, u64) {
-        let mut t = self.el_ms(now) % self.cycle;
+    fn pos(&self, el: u64) -> (usize, f32, u64) {
+        let mut t = el % self.cycle;
         for (i, s) in self.steps.iter().enumerate() {
             let ms = s.ms.max(1);
             if t < ms {
@@ -212,12 +368,12 @@ impl Full {
         &self.steps[(i + 1) % self.steps.len()].frame
     }
     /// 대표 프레임 (블렌드 중이면 더 많이 보이는 쪽).
-    fn at(&self, now: Instant) -> &str {
-        let (i, b, _) = self.pos(now);
+    fn at(&self, el: u64) -> &str {
+        let (i, b, _) = self.pos(el);
         if b > 0.5 { self.next_frame(i) } else { &self.steps[i].frame }
     }
-    fn kind(&self, now: Instant) -> DrawKind {
-        let (i, b, _) = self.pos(now);
+    fn kind(&self, el: u64) -> DrawKind {
+        let (i, b, _) = self.pos(el);
         let (a, n) = (&self.steps[i].frame, self.next_frame(i));
         if b > 0.0 && a != n {
             DrawKind::Mix { a: a.clone(), b: n.to_string(), t: b }
@@ -230,27 +386,81 @@ impl Full {
         self.breathe.is_some() || !self.fx.is_empty() || self.steps.iter().any(|s| s.blend_ms > 0)
     }
     /// 소품이 보일 정도: `on` 프레임이 보이는 비율.
-    fn on_weight(&self, on: &[String], now: Instant) -> f32 {
+    fn on_weight(&self, on: &[String], el: u64) -> f32 {
         if on.is_empty() {
             return 1.0;
         }
-        let (i, b, _) = self.pos(now);
+        let (i, b, _) = self.pos(el);
         let w = |f: &str| if on.iter().any(|o| o == f) { 1.0 } else { 0.0 };
         w(&self.steps[i].frame) * (1.0 - b) + w(self.next_frame(i)) * b
     }
     /// 숨쉬기 위상 -1~1 (없으면 0).
-    fn breath(&self, now: Instant) -> f32 {
-        self.breathe.as_ref().map_or(0.0, |b| (self.el_ms(now) as f32 / b.period_ms.max(1) as f32 * std::f32::consts::TAU).sin())
+    fn breath(&self, el: u64) -> f32 {
+        self.breathe.as_ref().map_or(0.0, |b| (el as f32 / b.period_ms.max(1) as f32 * std::f32::consts::TAU).sin())
     }
-    /// 블렌드가 없는 장면의 다음 프레임 전환 시각.
-    fn next_flip(&self, now: Instant) -> Option<Instant> {
+    /// 블렌드가 없는 장면의 다음 프레임 전환까지 남은 ms.
+    fn next_flip(&self, el: u64) -> Option<u64> {
         if self.steps.len() < 2 {
             return None;
         }
-        let (_, _, t) = self.pos(now);
-        let (i, _, _) = self.pos(now);
-        let left = self.steps[i].ms.max(1) - t;
-        Some(now + Duration::from_millis(left))
+        let (i, _, t) = self.pos(el);
+        Some(self.steps[i].ms.max(1) - t)
+    }
+}
+
+/// 재생 중인 behavior 하나 (또는 장면이 없는 pose 의 대체 한 장).
+#[derive(Debug, Clone)]
+struct Run {
+    serial: u64,
+    /// behaviors 의 번호. None 이면 대체 한 장.
+    idx: Option<usize>,
+    name: String,
+    mode: LayerMode,
+    priority: i32,
+    start: Instant,
+    /// 끝 시각. None 이면 pose/hold 조건이 끝날 때까지.
+    end: Option<Instant>,
+    /// pose 로 시작한 full 이면 그 pose (pose 가 바뀌면 끝).
+    pose: Option<Pose>,
+    /// hold: 조건 cue, 재생 ms (0 이면 계속), 쉬는 ms.
+    hold: Option<(Cue, u64, u64)>,
+    full: Option<Full>,
+}
+
+impl Run {
+    fn el_ms(&self, now: Instant) -> u64 {
+        now.saturating_duration_since(self.start).as_millis() as u64
+    }
+    /// 보이는 동안의 behavior 안 경과 ms. hold 가 쉬는 중이면 None.
+    fn local(&self, now: Instant) -> Option<u64> {
+        let el = self.el_ms(now);
+        match self.hold {
+            Some((_, d, c)) if d > 0 => {
+                let ph = el % (d + c).max(1);
+                (ph < d).then_some(ph)
+            }
+            _ => Some(el),
+        }
+    }
+    /// 한 번 재생하는 길이 (ms). 조건이 끝날 때까지면 None.
+    fn len_ms(&self) -> Option<u64> {
+        match (self.hold, self.end) {
+            (Some((_, d, _)), _) if d > 0 => Some(d),
+            (_, Some(e)) => Some(e.saturating_duration_since(self.start).as_millis() as u64),
+            _ => None,
+        }
+    }
+    /// 다음에 보이기 시작하거나 멈추는 시각 (hold 의 재생/쉬기 경계, 끝).
+    fn next_edge(&self, now: Instant) -> Option<Instant> {
+        if let Some((_, d, c)) = self.hold {
+            if d > 0 {
+                let cyc = (d + c).max(1);
+                let ph = self.el_ms(now) % cyc;
+                let left = if ph < d { d - ph } else { cyc - ph };
+                return Some(now + Duration::from_millis(left.max(1)));
+            }
+        }
+        self.end.filter(|e| *e > now)
     }
 }
 
@@ -262,11 +472,14 @@ pub struct Animator {
     tips: BTreeMap<String, [f32; 2]>,
     masks: BTreeMap<String, String>,
     head_anchor: [f32; 2],
+    body_anchor: [f32; 2],
     /// 마우스 연출 축. 레이어(paw_r/mouse_bg, fx/mouse_arm)가 없으면 None.
     swing: Option<Swing>,
     /// 캔버스 px / 표시 pt.
     px_per_pt: f32,
     pub breathing: bool,
+    /// false 면 장면 cue(idle, milestone, gesture) 밖의 behavior 를 하지 않는다 (조합 시트, "반응 줄이기").
+    pub cue_behaviors: bool,
 
     state: PetState,
     head_fade: Option<HeadFade>,
@@ -280,25 +493,37 @@ pub struct Animator {
     sun_drop: Option<Instant>,
     /// 선글라스 낙하 직전 머리 레이어 (낙하 중에 보이는 머리).
     sun_prev_head: String,
-    scenes: BTreeMap<Pose, Vec<Scene>>,
-    /// 발동 조건별로 몇 번 틀었는지 (여러 장면을 돌아가며 고른다).
-    scene_count: BTreeMap<Pose, usize>,
-    full: Option<Full>,
-    prev_full: Option<Full>,
+
+    behaviors: Vec<Behavior>,
+    /// cue 별로 몇 번 했는지 (여러 behavior 를 돌아가며 고른다).
+    cue_count: HashMap<Cue, usize>,
+    /// behavior 별 마지막 시작 시각 (cooldown).
+    last_start: HashMap<usize, Instant>,
+    runs: Vec<Run>,
+    serial: u64,
+    rng: u64,
+    /// 지금 보이는 full 과 그 직전 것 (바뀔 때 크로스페이드).
+    shown_full: Option<Run>,
+    prev_full: Option<Run>,
     pose_fade: Option<Instant>,
+    /// 새로 시작한 behavior 이름 (트레이스용, drain_started 로 비운다).
+    started: Vec<String>,
 }
 
 impl Animator {
     pub fn new(m: &Manifest, size_pt: f32, now: Instant) -> Self {
+        let ha = m.head_anchor;
         Self {
             a: m.anim.clone(),
             layers: Layers::from_manifest(m),
             tips: m.tips.clone(),
             masks: m.masks.iter().filter(|(_, v)| m.layers.contains(v)).map(|(k, v)| (k.clone(), v.clone())).collect(),
-            head_anchor: m.head_anchor,
+            head_anchor: ha,
+            body_anchor: m.body_anchor.unwrap_or([ha[0], ha[1] + m.canvas as f32 * 0.25]),
             swing: m.swing.clone().filter(|_| ["paw_r/mouse_bg", "fx/mouse_arm"].iter().all(|l| m.layers.iter().any(|x| x == l))),
             px_per_pt: m.canvas as f32 / size_pt,
             breathing: false,
+            cue_behaviors: true,
             state: PetState::default(),
             head_fade: None,
             dizzy_since: now,
@@ -308,22 +533,35 @@ impl Animator {
             glows: Vec::new(),
             sun_drop: None,
             sun_prev_head: "head/normal".into(),
-            scenes: {
-                let mut v: BTreeMap<Pose, Vec<Scene>> = BTreeMap::new();
-                for sc in &m.scenes {
-                    v.entry(sc.trigger).or_default().push(sc.clone());
-                }
-                v
-            },
-            scene_count: BTreeMap::new(),
-            full: None,
+            behaviors: m.all_behaviors(),
+            cue_count: HashMap::new(),
+            last_start: HashMap::new(),
+            runs: Vec::new(),
+            serial: 0,
+            rng: 0x2545_F491_4F6C_DD1D,
+            shown_full: None,
             prev_full: None,
             pose_fade: None,
+            started: Vec::new(),
         }
     }
 
     pub fn set_size_pt(&mut self, canvas: u32, size_pt: f32) {
         self.px_per_pt = canvas as f32 / size_pt;
+    }
+
+    /// chance 판정 순서를 바꾼다.
+    pub fn reseed(&mut self, seed: u64) {
+        self.rng = seed | 1;
+    }
+
+    fn rand01(&mut self) -> f32 {
+        let mut x = self.rng;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.rng = x;
+        (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32 / (1u64 << 24) as f32
     }
 
     pub fn layers(&self) -> &Layers {
@@ -347,6 +585,7 @@ impl Animator {
 
     /// 상태와 사건 반영.
     pub fn update(&mut self, state: PetState, events: &[PetEvent], now: Instant) {
+        self.tick(now);
         let old = self.state;
         if state.head != old.head {
             let from = self.head_layer(old.head, now).to_string();
@@ -367,11 +606,17 @@ impl Animator {
                     self.pop_start = Some(now);
                 }
             }
+            // 단계 cue: 이전 상태의 hold 는 끝내고, 새 상태의 enter/hold 를 시작
+            let cue = Cue::of_head(state.head);
+            self.runs.retain(|r| r.hold.is_none_or(|(c, ..)| c == cue));
+            self.fire(cue, None, now);
+            self.start_holds(cue, now);
         }
         if state.pose != old.pose {
-            self.pose_fade = Some(now);
-            self.prev_full = self.full.take();
-            self.full = state.pose.and_then(|p| self.start_full(p, now));
+            self.runs.retain(|r| r.pose.is_none() || r.pose != old.pose);
+            if let Some(p) = state.pose {
+                self.fire(Cue::of_pose(p), Some(p), now);
+            }
         }
         for ev in events {
             match ev {
@@ -383,31 +628,171 @@ impl Animator {
                     }
                     self.last_move = Some(now);
                 }
+                PetEvent::Cue(c) => self.fire(*c, None, now),
             }
         }
         self.state = state;
+        self.tick(now);
     }
 
-    /// 연출 시작: 이 조건의 장면이 있으면 돌아가며 하나, 없으면 레이어 한 장(full/gesture).
-    fn start_full(&mut self, p: Pose, now: Instant) -> Option<Full> {
-        if let Some(list) = self.scenes.get(&p).filter(|l| !l.is_empty()) {
-            let c = self.scene_count.entry(p).or_default();
-            let sc = &list[*c % list.len()];
-            *c += 1;
-            let steps: Vec<Step> = sc.timeline().into_iter().filter(|s| self.layers.has(&s.frame)).collect();
-            if !steps.is_empty() {
-                let mut f = Full::new(steps, now);
-                f.breathe = sc.breathe.clone();
-                f.fx = sc.fx.iter().filter(|x| self.layers.has(&x.layer)).cloned().collect();
-                return Some(f);
+    /// cue 에 반응: 이 cue 의 enter behavior 중 cooldown/chance 를 통과한 것을 돌아가며 하나.
+    /// 장면 cue 인데 고를 게 없으면 레이어 한 장(full/gesture 등)으로 대신한다.
+    fn fire(&mut self, cue: Cue, pose: Option<Pose>, now: Instant) {
+        let mut cands = Vec::new();
+        if self.cue_behaviors || pose.is_some() {
+            for i in 0..self.behaviors.len() {
+                let b = &self.behaviors[i];
+                if b.on != cue || b.when != When::Enter {
+                    continue;
+                }
+                let cd = Duration::from_secs_f32(b.cooldown_s);
+                if self.last_start.get(&i).is_some_and(|&t| now.saturating_duration_since(t) < cd) {
+                    continue;
+                }
+                let chance = b.chance;
+                if chance < 1.0 && self.rand01() >= chance {
+                    continue;
+                }
+                cands.push(i);
             }
         }
-        self.layers.resolve(p.layer()).map(|l| Full::new(vec![Step { frame: l, ms: 1000, blend_ms: 0 }], now))
+        if !cands.is_empty() {
+            let c = self.cue_count.entry(cue).or_default();
+            let i = cands[*c % cands.len()];
+            *c += 1;
+            if self.start_run(i, pose, None, now) {
+                return;
+            }
+        }
+        if let Some(p) = pose {
+            if let Some(l) = self.layers.resolve(p.layer()) {
+                self.push_run(Run {
+                    serial: 0,
+                    idx: None,
+                    name: l.clone(),
+                    mode: LayerMode::Full,
+                    priority: 10,
+                    start: now,
+                    end: None,
+                    pose: Some(p),
+                    hold: None,
+                    full: Some(Full::new(vec![Step { frame: l, ms: 1000, blend_ms: 0 }])),
+                });
+            }
+        }
+    }
+
+    /// 이 상태인 동안 반복하는 behavior 들 (chance 는 들어갈 때 한 번).
+    fn start_holds(&mut self, cue: Cue, now: Instant) {
+        if !self.cue_behaviors {
+            return;
+        }
+        for i in 0..self.behaviors.len() {
+            let b = &self.behaviors[i];
+            if b.on != cue || b.when != When::Hold || self.runs.iter().any(|r| r.idx == Some(i)) {
+                continue;
+            }
+            let hold = (cue, b.duration_ms.unwrap_or(0), (b.cooldown_s * 1000.0) as u64);
+            let chance = b.chance;
+            if chance < 1.0 && self.rand01() >= chance {
+                continue;
+            }
+            self.start_run(i, None, Some(hold), now);
+        }
+    }
+
+    /// behavior 하나를 시작한다. full 인데 그릴 프레임이 없으면 false.
+    fn start_run(&mut self, i: usize, pose: Option<Pose>, hold: Option<(Cue, u64, u64)>, now: Instant) -> bool {
+        let b = &self.behaviors[i];
+        let mode = b.mode();
+        let full = match mode {
+            LayerMode::Full => {
+                let steps: Vec<Step> = b.timeline().into_iter().filter(|s| self.layers.has(&s.frame)).collect();
+                if steps.is_empty() {
+                    return false;
+                }
+                let mut f = Full::new(steps);
+                f.breathe = b.breathe.clone();
+                f.fx = b.fx.clone();
+                Some(f)
+            }
+            LayerMode::Overlay => None,
+        };
+        // pose 로 시작한 full 은 pose 가 끝날 때, hold 는 조건이 끝날 때 끝난다
+        let end = if hold.is_some() || (pose.is_some() && mode == LayerMode::Full) {
+            None
+        } else {
+            Some(now + Duration::from_millis(b.duration_ms.unwrap_or(Behavior::DEFAULT_MS)))
+        };
+        let run = Run {
+            serial: 0,
+            idx: Some(i),
+            name: b.name.clone(),
+            mode,
+            priority: b.priority,
+            start: now,
+            end,
+            pose: if mode == LayerMode::Full { pose } else { None },
+            hold,
+            full,
+        };
+        self.last_start.insert(i, now);
+        self.started.push(run.name.clone());
+        self.push_run(run);
+        true
+    }
+
+    fn push_run(&mut self, mut r: Run) {
+        self.serial += 1;
+        r.serial = self.serial;
+        self.runs.push(r);
+    }
+
+    /// 조합 시트/검사용: 조건과 상관없이 behavior 를 바로 시작한다. 이름이 없으면 false.
+    pub fn force(&mut self, name: &str, now: Instant) -> bool {
+        let Some(i) = self.behaviors.iter().position(|b| b.name == name) else { return false };
+        let b = &self.behaviors[i];
+        let hold = (b.when == When::Hold).then(|| (b.on, b.duration_ms.unwrap_or(0), (b.cooldown_s * 1000.0) as u64));
+        let pose = b.on.pose().filter(|_| hold.is_none());
+        let ok = self.start_run(i, pose, hold, now);
+        self.tick(now);
+        ok
+    }
+
+    /// 끝난 run 정리, 보이는 full 이 바뀌었으면 크로스페이드 시작.
+    fn tick(&mut self, now: Instant) {
+        self.runs.retain(|r| r.end.is_none_or(|e| e > now));
+        let cur = self.top(LayerMode::Full, now).map(|r| r.serial);
+        if cur != self.shown_full.as_ref().map(|r| r.serial) {
+            self.prev_full = self.shown_full.take();
+            self.shown_full = self.top(LayerMode::Full, now).cloned();
+            self.pose_fade = Some(now);
+        }
+    }
+
+    /// 이 층에서 지금 보이는 run: 우선순위가 큰 쪽, 같으면 나중 것.
+    fn top(&self, mode: LayerMode, now: Instant) -> Option<&Run> {
+        self.runs.iter().filter(|r| r.mode == mode && r.end.is_none_or(|e| e > now) && r.local(now).is_some()).max_by_key(|r| (r.priority, r.serial))
+    }
+
+    fn behavior(&self, r: &Run) -> Option<&Behavior> {
+        r.idx.map(|i| &self.behaviors[i])
+    }
+
+    /// 새로 시작한 behavior 이름들 (트레이스용).
+    pub fn drain_started(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.started)
+    }
+
+    /// 지금 보이는 behavior 이름 (full, overlay 순).
+    pub fn playing(&self, now: Instant) -> Vec<String> {
+        [LayerMode::Full, LayerMode::Overlay].into_iter().filter_map(|m| self.top(m, now)).filter(|r| r.idx.is_some()).map(|r| r.name.clone()).collect()
     }
 
     /// 지금 재생 중인 장면 프레임 (테스트/추적용).
     pub fn full_layer(&self, now: Instant) -> Option<&str> {
-        self.full.as_ref().map(|f| f.at(now))
+        let r = self.top(LayerMode::Full, now)?;
+        r.full.as_ref().map(|f| f.at(r.local(now).unwrap_or(0)))
     }
 
     /// 마우스 흔들기 세기 0~1: 시작할 때 swing_fade_ms 동안 커지고, 마지막 이동 뒤 swing_hold_ms 가 지나면 줄어든다.
@@ -430,8 +815,52 @@ impl Animator {
         }
     }
 
+    /// 몸 전체 움직임. base_clean(캐릭터를 지운 책상) 이 없으면 드러나는 자리가 어색하지 않게 2pt 안으로.
+    fn body_xf(&self, motion: &[Motion], fx: &[SceneFx], lt: f32, len: Option<f32>) -> Xf {
+        let x = motion_xf(motion, fx, MotionTarget::Body, lt, len, self.body_anchor, self.px_per_pt);
+        if self.layers.has("base_clean") { x } else { x.clamp_offset(2.0 * self.px_per_pt) }
+    }
+
+    /// 몸을 움직여 그린다: 제자리에 `rest`, 캐릭터를 지운 책상(있으면), 몸 마스크 안을 옮겨서 `kind`.
+    /// 몸 마스크가 없으면 `rest` 자체를 옮긴다.
+    fn body_cmds(&self, rest: DrawCmd, kind: DrawKind, body: &Xf) -> Vec<DrawCmd> {
+        if body.is_identity() {
+            return vec![rest];
+        }
+        let alpha = rest.opacity;
+        let Some(bm) = self.masks.get("body") else {
+            let mut c = rest;
+            body.apply(&mut c);
+            return vec![c];
+        };
+        let mut v = vec![rest];
+        if self.layers.has("base_clean") {
+            v.push(DrawCmd { opacity: alpha, mask: Some(bm.clone()), ..DrawCmd::layer("base_clean") });
+        }
+        let mut moved = DrawCmd { kind, opacity: alpha, mask: Some(bm.clone()), ..DrawCmd::layer("") };
+        body.apply(&mut moved);
+        v.push(moved);
+        v
+    }
+
+    /// 앞발 그리기. 몸이 움직이고 `<g>_top`/`<g>_low` 마스크가 있으면 키보드 윗줄 아래(책상, 키보드 조각)는 제자리,
+    /// 위(팔)는 몸과 같이 옮긴다. 없으면 앞발 전체를 제자리에.
+    fn paw_cmds(&self, layer: &str, group: &str, body: &Xf) -> Vec<DrawCmd> {
+        let split = (self.masks.get(&format!("{group}_low")), self.masks.get(&format!("{group}_top")));
+        match split {
+            (Some(low), Some(top)) if !body.is_identity() => {
+                let rest = DrawCmd { mask: Some(low.clone()), ..DrawCmd::layer(layer) };
+                let mut moved = DrawCmd { mask: Some(top.clone()), ..DrawCmd::layer(layer) };
+                body.apply(&mut moved);
+                vec![rest, moved]
+            }
+            _ => vec![DrawCmd { mask: self.masks.get(group).cloned(), ..DrawCmd::layer(layer) }],
+        }
+    }
+
     /// 이 시각에 그릴 목록.
     pub fn frame(&mut self, now: Instant) -> Frame {
+        self.tick(now);
         self.glows.retain(|g| progress(now, g.start, self.a.glow_ms) < 1.0);
         let a = &self.a;
         let pt = self.px_per_pt;
@@ -439,20 +868,25 @@ impl Animator {
 
         // 특수 포즈 투명도
         let pose_p = self.pose_fade.map(|s| ease_in_out(progress(now, s, a.pose_fade_ms))).unwrap_or(1.0);
-        let (full_layer, full_alpha) = match (&self.full, &self.prev_full) {
-            (Some(f), _) => (Some(f), pose_p),
-            (None, Some(f)) => (Some(f), 1.0 - pose_p),
+        let shown = self.top(LayerMode::Full, now);
+        let (full_run, full_alpha) = match (shown, &self.prev_full) {
+            (Some(r), _) => (Some(r), pose_p),
+            (None, Some(r)) => (Some(r), 1.0 - pose_p),
             (None, None) => (None, 0.0),
         };
 
         let mut cmds = Vec::new();
         if full_alpha < 1.0 {
-            cmds.push(DrawCmd::layer("base"));
-            // 앞발. 책상이 같이 움직이지 않도록 앞발 레이어는 제자리에 그린다
+            // 얹는 behavior: 몸/머리 움직임, 머리 바꾸기, 소품
+            let ov = self.top(LayerMode::Overlay, now).and_then(|r| Some((r, self.behavior(r)?, r.local(now)? as f32, r.len_ms().map(|l| l as f32))));
+            let body = ov.map_or(Xf::identity(self.body_anchor), |(_, b, lt, len)| self.body_xf(&b.motion, &b.fx, lt, len));
+            let head_m = ov.map_or(Xf::identity(self.head_anchor), |(_, b, lt, len)| {
+                motion_xf(&b.motion, &b.fx, MotionTarget::Head, lt, len, self.head_anchor, pt)
+            });
+            cmds.extend(self.body_cmds(DrawCmd::layer("base"), DrawKind::Layer { name: "base".into() }, &body));
+            // 앞발. 책상이 같이 움직이지 않도록 앞발 레이어는 제자리에 그린다 (몸이 움직이면 팔 부분만 따라감)
             if let Some(l) = self.layers.resolve(st.paw_l.layer()) {
-                let mut c = DrawCmd::layer(&l);
-                c.mask = self.masks.get("paw_l").cloned();
-                cmds.push(c);
+                cmds.extend(self.paw_cmds(&l, "paw_l", &body));
             }
             match (&self.swing, st.paw_r) {
                 (Some(sw), PawR::Mouse) => {
@@ -470,9 +904,7 @@ impl Animator {
                 }
                 _ => {
                     if let Some(l) = self.layers.resolve(st.paw_r.layer()) {
-                        let mut c = DrawCmd::layer(&l);
-                        c.mask = self.masks.get("paw_r").cloned();
-                        cmds.push(c);
+                        cmds.extend(self.paw_cmds(&l, "paw_r", &body));
                     }
                 }
             }
@@ -483,11 +915,8 @@ impl Animator {
                 cmds.push(DrawCmd {
                     kind: DrawKind::Glow { center: g.center, radius: r, color: a.glow_color },
                     opacity: 1.0 - p,
-                    offset: [0.0; 2],
-                    scale: 1.0,
                     anchor: g.center,
-                    mask: None,
-                    warp: None,
+                    ..DrawCmd::layer("")
                 });
             }
             // 머리
@@ -504,7 +933,18 @@ impl Animator {
             } else {
                 0.0
             };
-            let head_cur = self.layers.resolve(self.head_layer(st.head, now));
+            let mut head_cur = self.layers.resolve(self.head_layer(st.head, now));
+            // 머리 바꾸기: 시작/끝 head_fade_ms 동안 원래 머리와 섞는다
+            let mut swap: Option<(String, f32)> = None;
+            if let Some((_, b, lt, len)) = ov {
+                if let Some(h) = &b.head {
+                    let fr = h.frames();
+                    let name = fr[(lt as u64 / h.frame_ms.max(1)) as usize % fr.len()];
+                    let fade = a.head_fade_ms.max(1) as f32;
+                    let w = ease_in_out(lt / fade) * len.map_or(1.0, |l| ease_in_out((l - lt) / fade));
+                    swap = self.layers.resolve(name).map(|n| (n, w));
+                }
+            }
             let mut fx: Option<DrawCmd> = None;
             let head_kind = if let Some(start) = self.sun_drop {
                 // 1) 이전 머리 위로 선글라스가 내려옴 2) 머리를 head/sunglasses 로 크로스페이드, 선글라스는 사라짐
@@ -526,71 +966,78 @@ impl Animator {
                     }
                     mix_or_layer(prev, head_cur, t)
                 }
+            } else if let Some((name, w)) = swap {
+                mix_or_layer(head_cur.take(), Some(name), w)
             } else if let Some(f) = &self.head_fade {
                 let t = ease_in_out(progress(now, f.start, a.head_fade_ms));
                 mix_or_layer(self.layers.resolve(&f.from), head_cur, t)
             } else {
                 head_cur.map(|name| DrawKind::Layer { name })
             };
+            let head_xf = body.then_of(&head_m);
             if let Some(kind) = head_kind {
                 let mask = self.masks.get("head").cloned();
-                cmds.push(DrawCmd { kind, opacity: 1.0, offset: [0.0, breathe], scale, anchor: self.head_anchor, mask, warp: None });
+                let mut c = DrawCmd { kind, offset: [0.0, breathe], scale, anchor: self.head_anchor, mask, ..DrawCmd::layer("") };
+                head_xf.apply(&mut c);
+                cmds.push(c);
             }
             if let Some(mut f) = fx {
                 f.offset[1] += breathe;
                 f.scale = scale;
+                head_xf.apply(&mut f);
                 cmds.push(f);
             }
+            if let Some((_, b, lt, len)) = ov {
+                cmds.extend(self.behavior_fx(&b.motion, &b.fx, lt, len, |_| 1.0, 0.0, 1.0));
+            }
         }
-        if let Some(f) = full_layer {
+        if let Some(r) = full_run {
             if full_alpha > 0.0 {
-                cmds.extend(self.full_cmds(f, full_alpha, now));
+                cmds.extend(self.full_cmds(r, full_alpha, now));
             }
         }
         Frame { cmds }
     }
 
-    /// 장면 그리기: 프레임(블렌드), 숨쉬기(머리 마스크 안을 오르내림), 소품.
-    fn full_cmds(&self, f: &Full, alpha: f32, now: Instant) -> Vec<DrawCmd> {
+    /// behavior 소품들 (fx:<이름> 움직임 포함).
+    #[allow(clippy::too_many_arguments)]
+    fn behavior_fx(&self, motion: &[Motion], fx: &[SceneFx], lt: f32, len: Option<f32>, on: impl Fn(&SceneFx) -> f32, bob: f32, alpha: f32) -> Vec<DrawCmd> {
         let pt = self.px_per_pt;
-        let kind = f.kind(now);
-        let mut v = vec![DrawCmd { kind: kind.clone(), opacity: alpha, ..DrawCmd::layer("") }];
-        let s = f.breath(now);
-        let bob = f.breathe.as_ref().map_or(0.0, |b| -s * b.pt * pt);
-        if let (Some(mask), true) = (self.masks.get("head"), f.breathe.is_some()) {
-            v.push(DrawCmd { kind, opacity: alpha, offset: [0.0, bob], anchor: self.head_anchor, mask: Some(mask.clone()), ..DrawCmd::layer("") });
-        }
-        for x in &f.fx {
-            let w = f.on_weight(&x.on, now) * alpha;
-            if w <= 0.0 {
-                continue;
-            }
-            let u = fract(f.el_ms(now) as f32 / x.period_ms.max(1) as f32 + x.phase);
-            let mut c = DrawCmd::layer(&x.layer);
-            c.anchor = x.anchor;
-            match x.kind {
-                FxKind::Float => {
-                    // 아래에서 나타나 떠오르며 살짝 흔들리다 사라진다
-                    let fade = ease_in_out(u / 0.25) * (1.0 - ease_in_out((u - 0.6) / 0.4));
-                    c.opacity = w * fade;
-                    c.offset = [(u * std::f32::consts::TAU).sin() * 2.0 * pt, -u * x.rise_pt * pt];
-                    c.scale = 0.85 + 0.3 * u;
-                }
-                FxKind::Pulse => {
-                    let k = 0.5 + 0.5 * (u * std::f32::consts::TAU).sin();
-                    c.opacity = w;
-                    c.offset = [0.0, bob];
-                    c.scale = x.scale[0] + (x.scale[1] - x.scale[0]) * k;
-                }
-            }
-            if c.opacity > 0.0 {
+        let mut v = Vec::new();
+        for (i, x) in fx.iter().enumerate() {
+            if let Some(mut c) = fx_cmd(x, lt, on(x) * alpha, bob, pt) {
+                motion_xf(motion, fx, MotionTarget::Fx(i), lt, len, x.anchor, pt).apply(&mut c);
                 v.push(c);
             }
         }
         v
     }
 
-    /// 머리/마우스/키 빛 연출이 진행 중이라 매 프레임(vsync) 그려야 하는가.
+    /// 장면 그리기: 프레임(블렌드), 몸/머리 움직임과 숨쉬기(마스크 안을 옮김), 소품.
+    fn full_cmds(&self, r: &Run, alpha: f32, now: Instant) -> Vec<DrawCmd> {
+        let Some(f) = &r.full else { return Vec::new() };
+        let pt = self.px_per_pt;
+        let el = r.local(now).unwrap_or(0);
+        let lt = el as f32;
+        let len = r.len_ms().map(|l| l as f32);
+        let motion: &[Motion] = self.behavior(r).map_or(&[], |b| &b.motion);
+        let kind = f.kind(el);
+        let body = self.body_xf(motion, &f.fx, lt, len);
+        let mut v = self.body_cmds(DrawCmd { kind: kind.clone(), opacity: alpha, ..DrawCmd::layer("") }, kind.clone(), &body);
+        let s = f.breath(el);
+        let bob = f.breathe.as_ref().map_or(0.0, |b| -s * b.pt * pt);
+        let mut head = motion_xf(motion, &f.fx, MotionTarget::Head, lt, len, self.head_anchor, pt);
+        head.offset[1] += bob;
+        if let (Some(mask), true) = (self.masks.get("head"), f.breathe.is_some() || !head.is_identity()) {
+            let mut c = DrawCmd { kind, opacity: alpha, anchor: self.head_anchor, mask: Some(mask.clone()), ..DrawCmd::layer("") };
+            body.then_of(&head).apply(&mut c);
+            v.push(c);
+        }
+        v.extend(self.behavior_fx(motion, &f.fx, lt, len, |x| f.on_weight(&x.on, el), bob, alpha));
+        v
+    }
+
+    /// 머리/마우스/키 빛/behavior 연출이 진행 중이라 매 프레임(vsync) 그려야 하는가.
     pub fn animating(&self, now: Instant) -> bool {
         let a = &self.a;
         let live = |s: Option<Instant>, d: u64| s.is_some_and(|s| progress(now, s, d) < 1.0);
@@ -600,33 +1047,70 @@ impl Animator {
             || self.pose_fade.is_some_and(|s| progress(now, s, a.pose_fade_ms) < 1.0)
             || live(self.sun_drop, a.sunglasses_drop_ms + a.head_fade_ms)
             || !self.glows.iter().all(|g| progress(now, g.start, a.glow_ms) >= 1.0)
+            || self.overlay_moving(now)
+    }
+
+    /// 보이는 overlay 가 움직이는 중인가 (움직임/소품, 또는 머리 바꾸기가 섞이는 중).
+    fn overlay_moving(&self, now: Instant) -> bool {
+        if self.top(LayerMode::Full, now).is_some() {
+            return false;
+        }
+        let Some(r) = self.top(LayerMode::Overlay, now) else { return false };
+        let Some(b) = self.behavior(r) else { return false };
+        if b.moves() {
+            return true;
+        }
+        let lt = r.local(now).unwrap_or(0);
+        let fade = self.a.head_fade_ms;
+        lt < fade || r.len_ms().is_some_and(|l| l.saturating_sub(lt) < fade)
     }
 
     /// 아무 연출도 없는 상태 (숨쉬기 대상).
     fn is_still(&self, now: Instant) -> bool {
-        !self.animating(now) && self.full.is_none()
+        !self.animating(now) && self.top(LayerMode::Full, now).is_none() && self.top(LayerMode::Overlay, now).is_none()
     }
 
-    /// 연속 애니메이션이 아닐 때 다음에 다시 그려야 하는 시각 (귀 흔들기 80ms, 숨쉬기 30fps).
+    /// 연속 애니메이션이 아닐 때 다음에 다시 그려야 하는 시각 (귀 흔들기 80ms, 숨쉬기 30fps, 장면 프레임, behavior 끝).
     pub fn next_redraw(&self, now: Instant) -> Option<Instant> {
         let mut t: Option<Instant> = None;
-        if self.state.head == Head::Dizzy && self.state.pose.is_none() && self.layers.has("head/dizzy_wiggle") {
+        let mut at = |x: Instant| t = Some(t.map_or(x, |y: Instant| y.min(x)));
+        let tick = now + Duration::from_secs_f32(1.0 / self.a.breathe_fps.max(1.0));
+        let full = self.top(LayerMode::Full, now);
+        if self.state.head == Head::Dizzy && full.is_none() && self.layers.has("head/dizzy_wiggle") {
             let w = self.a.wiggle_ms.max(1) as u128;
             let el = now.saturating_duration_since(self.dizzy_since).as_millis();
-            let next = self.dizzy_since + Duration::from_millis(((el / w + 1) * w) as u64);
-            t = Some(next);
+            at(self.dizzy_since + Duration::from_millis(((el / w + 1) * w) as u64));
         }
-        if let Some(full) = &self.full {
-            let f = if full.moving() { Some(now + Duration::from_secs_f32(1.0 / self.a.breathe_fps.max(1.0))) } else { full.next_flip(now) };
-            if let Some(f) = f {
-                t = Some(t.map_or(f, |x| x.min(f)));
+        if let Some(r) = full {
+            if let Some(f) = &r.full {
+                let moving = f.moving() || self.behavior(r).is_some_and(|b| !b.motion.is_empty());
+                let el = r.local(now).unwrap_or(0);
+                if moving {
+                    at(tick);
+                } else if let Some(left) = f.next_flip(el) {
+                    at(now + Duration::from_millis(left));
+                }
+            }
+        }
+        if full.is_none() {
+            if let Some(r) = self.top(LayerMode::Overlay, now) {
+                if let Some(h) = self.behavior(r).and_then(|b| b.head.as_ref()).filter(|h| h.frames().len() > 1) {
+                    let el = r.local(now).unwrap_or(0);
+                    let fm = h.frame_ms.max(1);
+                    at(now + Duration::from_millis(fm - el % fm));
+                }
+            }
+        }
+        // behavior 끝, hold 의 재생/쉬기 경계
+        for r in &self.runs {
+            if let Some(e) = r.next_edge(now) {
+                at(e);
             }
         }
         if self.breathing && self.is_still(now) {
-            let b = now + Duration::from_secs_f32(1.0 / self.a.breathe_fps.max(1.0));
-            t = Some(t.map_or(b, |x| x.min(b)));
+            at(tick);
         }
-        t
+        t.filter(|x| *x > now)
     }
 }
 

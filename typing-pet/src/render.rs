@@ -19,6 +19,7 @@ struct U {
     p: vec4<f32>,    // scale, opacity, mix_t, mode (0 = 레이어 over, 1 = 키 빛, 2 = 마스크 지우기, 3 = 마스크 더하기, 4 = 휘게 over)
     g: vec4<f32>,    // 빛 중심.xy, 반경 (uv), _ | 휘기: root.xy, tip.xy (uv)
     c: vec4<f32>,    // 빛 색 (premultiplied) | 휘기: d.xy, 반경 안/밖 (uv)
+    k: vec4<f32>,    // 가로/세로 배율 (squash), _, _
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(1) @binding(0) var ta: texture_2d<f32>;
@@ -37,7 +38,7 @@ fn vs(@builtin(vertex_index) i: u32) -> VO {
         vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0),
         vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0));
     let uv = corners[i];
-    let p = u.xf.xy + (uv - u.xf.xy) * u.p.x + u.xf.zw;
+    let p = u.xf.xy + (uv - u.xf.xy) * u.p.x * u.k.xy + u.xf.zw;
     var o: VO;
     o.pos = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
     o.uv = uv;
@@ -230,7 +231,7 @@ impl Renderer {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
-                    min_binding_size: wgpu::BufferSize::new(64),
+                    min_binding_size: wgpu::BufferSize::new(80),
                 },
                 count: None,
             }],
@@ -314,7 +315,7 @@ impl Renderer {
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &uni_buf,
                     offset: 0,
-                    size: wgpu::BufferSize::new(64),
+                    size: wgpu::BufferSize::new(80),
                 }),
             }],
         });
@@ -435,7 +436,7 @@ impl Renderer {
     /// Frame 을 target 에 그린다 (투명으로 지운 뒤).
     pub fn draw(&mut self, frame: &Frame, target: &wgpu::TextureView) {
         let c = self.canvas as f32;
-        let mut unis: Vec<[f32; 16]> = Vec::new();
+        let mut unis: Vec<[f32; 20]> = Vec::new();
         let mut binds: Vec<(u8, wgpu::BindGroup)> = Vec::new();
         for cmd in &frame.cmds {
             let (a, b, t, mode, g) = match &cmd.kind {
@@ -463,6 +464,7 @@ impl Renderer {
                     cmd.scale, cmd.opacity, t, mode,
                     g[0], g[1], g[2], g[3],
                     col[0], col[1], col[2], col[3],
+                    cmd.squash[0], cmd.squash[1], 0.0, 0.0,
                 ]
             };
             if !m.is_empty() && mode == 0.0 {

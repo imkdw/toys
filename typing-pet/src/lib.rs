@@ -22,6 +22,8 @@ use crate::pet::{Head, PawL, PawR, PetState, Pose};
 pub fn settled_frame(m: &Manifest, state: PetState, wiggle: bool) -> Frame {
     let t0 = Instant::now();
     let mut a = Animator::new(m, 240.0, t0);
+    // 조합 시트는 상태 조합만 본다 (단계 cue 로 나오는 behavior 는 behavior_frames 에서 따로)
+    a.cue_behaviors = false;
     a.update(state, &[], t0);
     // 전환이 다 끝난 뒤, 귀 흔들기 교대의 짝/홀 위치
     let w = m.anim.wiggle_ms.max(1);
@@ -48,13 +50,48 @@ pub fn all_states() -> Vec<(String, PetState, bool)> {
     v
 }
 
-/// `--scenario` 이름별 입력: demo(기본, [`timeline_inputs`]), idle(키 하나 뒤 입력 없음), milestone(키를 빠르게 계속).
+/// 장면 cue(idle, milestone, gesture) 밖의 behavior 마다 한 장: 그 behavior 를 바로 시작해 중간쯤을 그린다.
+/// 이름은 `bhv-<behavior 이름>`. 단계 cue 면 그 머리 상태에서 시작한다.
+pub fn behavior_frames(m: &Manifest) -> Vec<(String, Frame)> {
+    use crate::pet::Cue;
+    let mut v = Vec::new();
+    for b in m.all_behaviors().into_iter().filter(|b| b.on.pose().is_none()) {
+        let t0 = Instant::now();
+        let mut a = Animator::new(m, 240.0, t0);
+        a.cue_behaviors = false;
+        let head = match b.on {
+            Cue::Level(h) => h,
+            Cue::Egg => Head::Sunglasses,
+            _ => Head::Normal,
+        };
+        // 머리 전환이 끝난 뒤에 시작한다
+        let t1 = t0 + Duration::from_millis(2000);
+        a.update(PetState { head, ..Default::default() }, &[], t0);
+        a.frame(t1);
+        a.cue_behaviors = true;
+        if !a.force(&b.name, t1) {
+            continue;
+        }
+        let len = b.duration_ms.filter(|&d| d > 0).unwrap_or(crate::config::Behavior::DEFAULT_MS);
+        v.push((format!("bhv-{}", b.name), a.frame(t1 + Duration::from_millis(len * 2 / 5))));
+    }
+    v
+}
+
+/// `--scenario` 이름별 입력: demo(기본, [`timeline_inputs`]), idle(키 하나 뒤 입력 없음), milestone(키를 빠르게 계속),
+/// wake(쉬다가 다시 치기), burst(가끔 몰아치기), levels(천천히 과열까지 올렸다 식히기), ambient(키 하나 뒤 오래 가만히, --secs 200 쯤),
+/// keys(Enter/Backspace/Space 등 이름 있는 키).
 pub fn scenario_inputs(name: &str) -> Option<Vec<(u64, crate::input::Input)>> {
     use crate::input::Input;
+    let typing = |from: u64, to: u64, gap: u64| (0..).map(move |k| (from + k * gap, Input::Key([0u16, 37, 1, 38][k as usize % 4]))).take_while(move |(t, _)| *t < to);
     match name {
         "demo" => Some(timeline_inputs()),
-        "idle" => Some(vec![(300, Input::Key(0))]),
+        "idle" | "ambient" => Some(vec![(300, Input::Key(0))]),
         "milestone" => Some((0..400u64).map(|k| (300 + k * 40, Input::Key([0u16, 37, 1, 38][k as usize % 4]))).collect()),
+        "wake" => Some(typing(300, 2_000, 200).chain(typing(18_000, 22_000, 200)).collect()),
+        "burst" => Some((0..4u64).flat_map(|r| typing(500 + r * 3_000, 1_500 + r * 3_000, 70)).collect()),
+        "levels" => Some(typing(300, 9_000, 75).chain(typing(9_000, 12_000, 300)).collect()),
+        "keys" => Some([36u16, 51, 51, 51, 49, 48, 53, 117, 36].iter().enumerate().map(|(i, &c)| (300 + i as u64 * 1_500, Input::Key(c))).collect()),
         _ => None,
     }
 }

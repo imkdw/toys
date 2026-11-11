@@ -10,6 +10,7 @@ use crate::config::{Config, SIZES};
 pub enum TrayAction {
     ToggleVisible,
     ToggleBreathing,
+    ToggleCalm,
     Size(f64),
     /// `Tray::characters` 의 순번.
     Character(usize),
@@ -23,6 +24,7 @@ pub struct Tray {
     menu: Menu,
     visible: CheckMenuItem,
     breathing: CheckMenuItem,
+    calm: CheckMenuItem,
     login: CheckMenuItem,
     sizes: Vec<(f64, CheckMenuItem)>,
     /// 지금 크기 표시 + 자유 조절 안내 (누를 수 없음).
@@ -84,6 +86,7 @@ impl Tray {
         }
         let visible = CheckMenuItem::new("보이기", true, cfg.visible, None);
         let breathing = CheckMenuItem::new("숨쉬기", true, cfg.breathing, None);
+        let calm = CheckMenuItem::new("반응 줄이기", true, cfg.calm, None);
         let size_menu = Submenu::new("크기", true);
         let mut sizes = Vec::new();
         for s in SIZES {
@@ -98,12 +101,13 @@ impl Tray {
         let login = CheckMenuItem::new("로그인 시 자동 실행", crate::mac::bundle_path().is_some(), crate::mac::login_item_enabled(), None);
         let warning = MenuItem::new("⚠ 입력 모니터링 권한 필요 (설정 열기)", true, None);
         let quit = MenuItem::new("종료", true, None);
-        menu.append_items(&[&char_menu, &visible, &breathing, &size_menu, &login, &PredefinedMenuItem::separator(), &quit])
+        menu.append_items(&[&char_menu, &visible, &breathing, &calm, &size_menu, &login, &PredefinedMenuItem::separator(), &quit])
             .map_err(|e| e.to_string())?;
 
         let mut ids = vec![
             (visible.id().clone(), TrayAction::ToggleVisible),
             (breathing.id().clone(), TrayAction::ToggleBreathing),
+            (calm.id().clone(), TrayAction::ToggleCalm),
             (login.id().clone(), TrayAction::ToggleLoginItem),
             (warning.id().clone(), TrayAction::OpenPermissionSettings),
             (quit.id().clone(), TrayAction::Quit),
@@ -127,7 +131,7 @@ impl Tray {
             .with_tooltip("typing-pet")
             .build()
             .map_err(|e| e.to_string())?;
-        Ok(Self { _icon: icon, menu, visible, breathing, login, sizes, size_now, characters: chars, warning, warning_shown: false, ids })
+        Ok(Self { _icon: icon, menu, visible, breathing, calm, login, sizes, size_now, characters: chars, warning, warning_shown: false, ids })
     }
 
     /// 순번 -> 캐릭터 폴더 이름.
@@ -145,6 +149,7 @@ impl Tray {
     pub fn sync(&self, cfg: &Config) {
         self.visible.set_checked(cfg.visible);
         self.breathing.set_checked(cfg.breathing);
+        self.calm.set_checked(cfg.calm);
         self.login.set_checked(crate::mac::login_item_enabled());
         for (s, item) in &self.sizes {
             item.set_checked((cfg.size - s).abs() < 0.5);

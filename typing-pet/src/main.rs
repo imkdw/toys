@@ -110,9 +110,11 @@ struct App {
 impl App {
     fn new(cfg: Config, manifest: Manifest, proxy: EventLoopProxy<AppEvent>) -> Self {
         let now = Instant::now();
-        let pet = Pet::new(manifest.timing.clone(), manifest.keys.clone(), now);
+        let mut pet = Pet::new(manifest.timing.clone(), manifest.keys.clone(), now);
         let mut anim = Animator::new(&manifest, cfg.size as f32, now);
         anim.breathing = cfg.breathing;
+        anim.cue_behaviors = !cfg.calm;
+        seed(&mut pet, &mut anim, now);
         Self {
             cfg,
             manifest,
@@ -248,6 +250,10 @@ impl App {
         if st != self.anim.state() || !events.is_empty() {
             trace::event(now, "state", || state_json(&st, self.pet.score(now)));
             self.anim.update(st, &events, now);
+            // behavior 는 이름만 남긴다 (cue 이름도 키 값이 아니라 enter/backspace 같은 종류뿐)
+            for name in self.anim.drain_started() {
+                trace::event(now, "behavior", || serde_json::json!({ "name": name }));
+            }
             self.request_redraw();
         }
     }
@@ -384,6 +390,11 @@ impl App {
                 }
                 self.save();
             }
+            TrayAction::ToggleCalm => {
+                self.cfg.calm = !self.cfg.calm;
+                self.anim.cue_behaviors = !self.cfg.calm;
+                self.save();
+            }
             TrayAction::ToggleBreathing => {
                 self.cfg.breathing = !self.cfg.breathing;
                 self.anim.breathing = self.cfg.breathing;
@@ -441,6 +452,8 @@ impl App {
         self.pet = Pet::new(m.timing.clone(), m.keys.clone(), now);
         self.anim = Animator::new(&m, self.cfg.size as f32, now);
         self.anim.breathing = self.cfg.breathing;
+        self.anim.cue_behaviors = !self.cfg.calm;
+        seed(&mut self.pet, &mut self.anim, now);
         log::info!("캐릭터 {} ({}), 레이어 {}개", m.name, m.dir.display(), m.layers.len());
         self.manifest = m;
         self.cfg.character = Some(name.to_string());
@@ -502,6 +515,13 @@ impl App {
             None => ControlFlow::Wait,
         });
     }
+}
+
+/// 행동 무작위(ambient 간격, chance)를 실행마다 다르게.
+fn seed(pet: &mut Pet, anim: &mut Animator, now: Instant) {
+    let s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
+    pet.reseed(s, now);
+    anim.reseed(s.rotate_left(17));
 }
 
 fn state_json(st: &PetState, score: f64) -> serde_json::Value {
@@ -632,6 +652,44 @@ impl ApplicationHandler<AppEvent> for App {
     }
 }
 
+/// `--check <캐릭터 폴더>`: 캐릭터 고유 행동 규칙 (계획 5.2). `_` 로 시작하는 폴더는 manifest 검사만.
+fn cli_check(args: &[String]) -> Option<i32> {
+    let i = args.iter().position(|a| a == "--check")?;
+    let Some(dir) = args.get(i + 1) else {
+        eprintln!("--check <캐릭터 폴더>");
+        return Some(2);
+    };
+    let path = std::path::Path::new(dir);
+    let m = match Manifest::load_dir(path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("[FAIL] {dir}: {e}");
+            return Some(1);
+        }
+    };
+    let folder = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let all = m.all_behaviors();
+    println!("{dir}: behavior {}개", all.len());
+    for b in &all {
+        println!("  {:<16} on={:<16} {:?}{}", b.name, b.on.to_string(), b.mode(), if b.moves() { " 움직임" } else { "" });
+    }
+    if folder.starts_with('_') {
+        println!("[PASS] {dir}: 테스트용 폴더라 고유 행동 규칙은 건너뜀");
+        return Some(0);
+    }
+    let errs = m.validate_character(&m.siblings());
+    if errs.is_empty() {
+        println!("[PASS] {dir}");
+        Some(0)
+    } else {
+        for e in &errs {
+            println!("  - {e}");
+        }
+        println!("[FAIL] {dir}: {}개 규칙 위반", errs.len());
+        Some(1)
+    }
+}
+
 /// `--render-state <json> --out <png> [--size px] [--wiggle]`, `--render-all <dir> [--size px]`,
 /// `--render-timeline <dir> [--fps n] [--secs n] [--scenario demo|idle|milestone] [--start 초]`.
 fn cli_render(args: &[String]) -> Option<Result<(), String>> {
@@ -664,6 +722,9 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
                 let path = format!("{dir}/{name}.png");
                 off.render(&frame).save(&path).map_err(|e| e.to_string())?;
             }
+            for (name, frame) in typing_pet::behavior_frames(&manifest) {
+                off.render(&frame).save(format!("{dir}/{name}.png")).map_err(|e| e.to_string())?;
+            }
             println!("{dir}");
         }
         if let Some(dir) = tl_arg {
@@ -675,7 +736,11 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
             let mut pet = Pet::new(manifest.timing.clone(), manifest.keys.clone(), t0);
             let mut anim = Animator::new(&manifest, 240.0, t0);
             let scenario = get("--scenario").unwrap_or_else(|| "demo".into());
-            let inputs = typing_pet::scenario_inputs(&scenario).ok_or(format!("알 수 없는 --scenario: {scenario} (demo, idle, milestone)"))?;
+            let inputs = typing_pet::scenario_inputs(&scenario)
+                .ok_or(format!("알 수 없는 --scenario: {scenario} (demo, idle, milestone, wake, burst, levels, ambient, keys)"))?;
+            // 같은 시나리오는 같은 결과 (캐릭터끼리 비교할 수 있게)
+            pet.reseed(7, t0);
+            anim.reseed(7);
             // --start 초 이전 프레임은 상태만 진행하고 그리지 않는다
             let start_ms: u64 = get("--start").and_then(|s| s.parse().ok()).unwrap_or(0) * 1000;
             let mut next = 0;
@@ -696,11 +761,16 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
                 let st = pet.state(now);
                 let ev = pet.drain_events();
                 anim.update(st, &ev, now);
+                let started = anim.drain_started();
                 if now_ms < start_ms {
+                    anim.frame(now);
                     continue;
                 }
                 off.render(&anim.frame(now)).save(format!("{dir}/{f:05}.png")).map_err(|e| e.to_string())?;
-                log.push(serde_json::json!({"ms": now_ms, "state": st, "score": (pet.score(now) * 10.0).round() / 10.0}));
+                log.push(serde_json::json!({
+                    "ms": now_ms, "state": st, "score": (pet.score(now) * 10.0).round() / 10.0,
+                    "started": started, "playing": anim.playing(now),
+                }));
             }
             std::fs::write(format!("{dir}/timeline.json"), serde_json::to_string(&log).unwrap_or_default()).map_err(|e| e.to_string())?;
             println!("{dir}");
@@ -733,6 +803,9 @@ fn main() {
             }
         }
         return;
+    }
+    if let Some(code) = cli_check(&args) {
+        std::process::exit(code);
     }
     if let Some(r) = cli_render(&args) {
         if let Err(e) = r {

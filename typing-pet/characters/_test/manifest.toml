@@ -6,18 +6,179 @@ layers = [
   "head/normal", "head/excited", "head/dizzy", "head/dizzy_wiggle", "head/overheat", "head/sleepy", "head/sunglasses",
   "paw_l/up", "paw_l/down",
   "paw_r/up", "paw_r/down", "paw_r/center", "paw_r/mouse", "paw_r/mouse_click",
-  "fx/sunglasses",
-  "full/gesture",
-  "mask/head", "mask/paw_l", "mask/paw_r",
+  "head/alt_a", "head/alt_b",
+  "base_clean",
+  "fx/sunglasses", "fx/bubble", "fx/drop", "fx/note", "fx/white",
+  "full/gesture", "full/startle",
+  "mask/head", "mask/paw_l", "mask/paw_r", "mask/body",
+  "mask/paw_l_top", "mask/paw_l_low", "mask/paw_r_top", "mask/paw_r_low",
 ]
 head_anchor = [256, 330]
+body_anchor = [256, 420]
 
 [masks]
 head = "mask/head"
 paw_l = "mask/paw_l"
 paw_r = "mask/paw_r"
+body = "mask/body"
+paw_l_top = "mask/paw_l_top"
+paw_l_low = "mask/paw_l_low"
+paw_r_top = "mask/paw_r_top"
+paw_r_low = "mask/paw_r_low"
 
 [tips]
 "paw_l/down" = [160, 392]
 "paw_r/down" = [320, 392]
 "paw_r/center" = [250, 395]
+
+# 엔진 테스트용 가짜 behavior: 모든 cue/motion/fx 종류를 한 번씩 쓴다 (characters/README.md).
+# 기존 단위 테스트가 쓰는 단계 전환(excited, dizzy, 선글라스)과 장면 cue 는 비워 둔다.
+
+[[behavior]]
+name = "t_shout"
+on = "level:overheat"
+duration_ms = 900
+priority = 20
+
+[[behavior.fx]]
+layer = "fx/bubble"
+kind = "pop_in"
+anchor = [400, 120]
+period_ms = 800
+scale = [0.3, 1.0]
+
+[[behavior.motion]]
+target = "body"
+kind = "hop"
+pt = 6
+period_ms = 450
+count = 1
+
+[[behavior]]
+name = "t_shiver"
+on = "level:overheat"
+when = "hold"
+duration_ms = 600
+cooldown_s = 0.4
+
+[[behavior.motion]]
+target = "body"
+kind = "tremble"
+pt = 1.5
+period_ms = 60
+
+[[behavior.fx]]
+layer = "fx/drop"
+kind = "fall"
+anchor = [340, 205]
+period_ms = 600
+rise_pt = 20
+
+[[behavior]]
+name = "t_startle"
+on = "wake"
+frames = ["full/startle"]
+duration_ms = 800
+cooldown_s = 5
+
+[[behavior.motion]]
+target = "body"
+kind = "hop"
+pt = 8
+period_ms = 400
+count = 1
+
+[[behavior.fx]]
+layer = "fx/drop"
+kind = "pulse"
+anchor = [340, 205]
+period_ms = 400
+scale = [0.6, 1.0]
+
+[[behavior]]
+name = "t_bounce"
+on = "burst"
+duration_ms = 700
+cooldown_s = 2
+
+[[behavior.motion]]
+target = "body"
+kind = "hop"
+pt = 3
+period_ms = 350
+count = 2
+
+[[behavior.motion]]
+target = "head"
+kind = "squash"
+squash = 0.06
+period_ms = 350
+count = 2
+
+[[behavior]]
+name = "t_nod"
+on = "key:enter"
+duration_ms = 600
+
+[behavior.head]
+layer = "head/alt_a"
+
+[[behavior.motion]]
+target = "head"
+kind = "nod"
+pt = 3
+period_ms = 500
+count = 1
+
+[[behavior]]
+name = "t_twitch"
+on = "ambient"
+duration_ms = 900
+
+[behavior.head]
+frames = ["head/alt_a", "head/alt_b"]
+frame_ms = 150
+
+[[behavior.motion]]
+target = "head"
+kind = "sway"
+pt = 2
+period_ms = 450
+
+[[behavior]]
+name = "t_flash"
+on = "key:escape"
+duration_ms = 1000
+chance = 0.5
+
+[[behavior.fx]]
+layer = "fx/white"
+kind = "flash"
+anchor = [256, 256]
+period_ms = 300
+
+[[behavior.fx]]
+layer = "fx/note"
+kind = "float"
+anchor = [105, 100]
+period_ms = 1000
+rise_pt = 12
+delay_ms = 100
+
+[[behavior.motion]]
+target = "fx:note"
+kind = "sway"
+pt = 3
+period_ms = 500
+
+[[behavior]]
+name = "t_slump"
+on = "level:sleepy"
+duration_ms = 800
+
+[[behavior.motion]]
+target = "body"
+kind = "squash"
+squash = 0.05
+period_ms = 800
+count = 1
