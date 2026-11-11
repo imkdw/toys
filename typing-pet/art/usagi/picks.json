@@ -8,17 +8,12 @@
   "paw_r/mouse": "mouse_2",
   "paw_r/mouse_click": "mouse_click_1",
   "head/excited": "head_excited_1",
-  "head/dizzy": "head_dizzy_1",
-  "head/overheat": "head_overheat_3",
+  "head/dizzy": "head_dazed_1",
+  "head/overheat": "head_fired_1",
   "head/sleepy": "head_ears_down_1",
   "head/sunglasses": "head_sunglasses_1",
   "full/gesture": "gesture_1",
   "_scenes": {
-    "staff": {
-      "trigger": "gesture",
-      "frame_ms": 350,
-      "duration_ms": 3000
-    },
     "sleep": {
       "trigger": "idle",
       "duration_ms": 0,
@@ -79,11 +74,6 @@
           ]
         }
       ]
-    },
-    "yaha": {
-      "trigger": "milestone",
-      "frame_ms": 300,
-      "duration_ms": 2500
     }
   },
   "full/staff_a": "scene_staff_a_2",
@@ -101,6 +91,203 @@
     "zzz": {
       "src": "scene_sleep_zzz_1",
       "ref": "scene_sleep_a_2"
+    },
+    "ura": {
+      "src": "behavior_ura_bubble_1",
+      "ref": "base_final"
+    },
+    "haa": {
+      "src": "behavior_haa_bubble_1",
+      "ref": "base_final"
+    },
+    "yaha": {
+      "src": "behavior_yaha_bubble_1",
+      "ref": "base_final"
     }
+  },
+  "head/haa": "head_haa_1",
+  "base_clean": "base_clean_1",
+  "_behaviors": {
+    "ura": {
+      "on": "level:excited",
+      "duration_ms": 1100,
+      "cooldown_s": 15,
+      "priority": 20,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "hop",
+          "pt": 6,
+          "period_ms": 450,
+          "count": 1
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/ura",
+          "kind": "pop_in",
+          "anchor": [
+            712,
+            284
+          ],
+          "period_ms": 1000,
+          "scale": [
+            0.3,
+            1.0
+          ]
+        }
+      ]
+    },
+    "prrr": {
+      "on": "level:dizzy",
+      "when": "hold",
+      "duration_ms": 800,
+      "cooldown_s": 1.5,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "tremble",
+          "pt": 1.6,
+          "period_ms": 50
+        }
+      ]
+    },
+    "fired": {
+      "on": "level:overheat",
+      "duration_ms": 700,
+      "cooldown_s": 20,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "squash",
+          "squash": 0.06,
+          "period_ms": 350,
+          "count": 2
+        },
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 3,
+          "period_ms": 350,
+          "count": 2
+        }
+      ]
+    },
+    "haa": {
+      "on": "wake",
+      "duration_ms": 1400,
+      "cooldown_s": 30,
+      "head": {
+        "layer": "head/haa"
+      },
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2.5,
+          "period_ms": 600,
+          "count": 1,
+          "delay_ms": 150
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/haa",
+          "kind": "pop_in",
+          "anchor": [
+            300,
+            300
+          ],
+          "period_ms": 1200,
+          "scale": [
+            0.3,
+            1.0
+          ]
+        }
+      ]
+    },
+    "bounce": {
+      "on": "burst",
+      "duration_ms": 800,
+      "cooldown_s": 4,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "hop",
+          "pt": 5,
+          "period_ms": 380,
+          "count": 2
+        }
+      ]
+    },
+    "ear_perk": {
+      "on": "ambient",
+      "duration_ms": 900,
+      "motion": [
+        {
+          "target": "head",
+          "kind": "sway",
+          "pt": 1.5,
+          "period_ms": 450,
+          "count": 2
+        }
+      ]
+    },
+    "yaha": {
+      "on": "milestone",
+      "layer_mode": "full",
+      "frame_ms": 300,
+      "duration_ms": 2500,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "hop",
+          "pt": 5,
+          "period_ms": 600,
+          "count": 2
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/yaha",
+          "kind": "pop_in",
+          "anchor": [
+            322,
+            316
+          ],
+          "period_ms": 2200,
+          "delay_ms": 100,
+          "scale": [
+            0.3,
+            1.0
+          ]
+        }
+      ]
+    },
+    "staff": {
+      "on": "gesture",
+      "layer_mode": "full",
+      "frame_ms": 350,
+      "duration_ms": 3000,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "sway",
+          "pt": 2,
+          "period_ms": 700
+        }
+      ]
+    }
+  },
+  "_timing": {
+    "level_up": [
+      10,
+      19,
+      28
+    ],
+    "burst_keys": 8
+  },
+  "_anim": {
+    "pop_scale": 1.08
   }
 }

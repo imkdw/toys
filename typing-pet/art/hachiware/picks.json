@@ -8,30 +8,203 @@
   "paw_r/mouse": "mouse_2",
   "paw_r/mouse_click": "mouse_click_1",
   "head/excited": "head_excited_2",
-  "head/dizzy": "head_dizzy_1",
-  "head/overheat": "head_overheat_1",
+  "head/dizzy": "head_dazed_1",
+  "head/overheat": "head_optimist_1",
   "head/sleepy": "head_ears_down_1",
   "head/sunglasses": "head_sunglasses_1",
   "full/gesture": "gesture_1",
-  "_scenes": {
-    "book": {
-      "trigger": "idle",
-      "frame_ms": 700
-    },
-    "camera": {
-      "trigger": "milestone",
-      "frame_ms": 350
-    },
-    "guitar": {
-      "trigger": "gesture",
-      "frame_ms": 350,
-      "duration_ms": 3000
-    }
-  },
+  "_scenes": {},
   "full/book_a": "scene_book_a_2",
   "full/book_b": "scene_book_b_1",
   "full/camera_a": "scene_camera_a_1",
   "full/camera_b": "scene_camera_b_1",
   "full/guitar_a": "scene_guitar_a_1",
-  "full/guitar_b": "scene_guitar_b_1"
+  "full/guitar_b": "scene_guitar_b_1",
+  "head/tongue": "head_tongue_1",
+  "base_clean": "base_clean_1",
+  "_fx": {
+    "nantoka": {
+      "src": "behavior_nantoka_bubble_1",
+      "ref": "base_final"
+    },
+    "note_a": {
+      "src": "behavior_note_a_1",
+      "ref": "base_final"
+    },
+    "note_b": {
+      "src": "behavior_note_b_1",
+      "ref": "base_final"
+    }
+  },
+  "_behaviors": {
+    "nantoka": {
+      "on": "level:overheat",
+      "duration_ms": 1800,
+      "cooldown_s": 15,
+      "priority": 20,
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2.5,
+          "period_ms": 500,
+          "count": 2
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/nantoka",
+          "kind": "pop_in",
+          "anchor": [
+            716,
+            262
+          ],
+          "period_ms": 1700,
+          "scale": [
+            0.3,
+            1.0
+          ]
+        }
+      ]
+    },
+    "humming": {
+      "on": "level:excited",
+      "when": "hold",
+      "duration_ms": 2400,
+      "cooldown_s": 3,
+      "motion": [
+        {
+          "target": "head",
+          "kind": "sway",
+          "pt": 1.8,
+          "period_ms": 900
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/note_a",
+          "kind": "float",
+          "anchor": [
+            202,
+            257
+          ],
+          "period_ms": 1600,
+          "rise_pt": 16
+        },
+        {
+          "layer": "fx/note_b",
+          "kind": "float",
+          "anchor": [
+            875,
+            270
+          ],
+          "period_ms": 1600,
+          "phase": 0.5,
+          "rise_pt": 16
+        }
+      ]
+    },
+    "tongue": {
+      "on": "ambient",
+      "duration_ms": 1500,
+      "head": {
+        "layer": "head/tongue"
+      },
+      "motion": [
+        {
+          "target": "head",
+          "kind": "sway",
+          "pt": 1,
+          "period_ms": 700,
+          "count": 1
+        }
+      ]
+    },
+    "hello": {
+      "on": "wake",
+      "duration_ms": 900,
+      "cooldown_s": 20,
+      "head": {
+        "layer": "head/tongue"
+      },
+      "motion": [
+        {
+          "target": "body",
+          "kind": "hop",
+          "pt": 4,
+          "period_ms": 450,
+          "count": 1
+        }
+      ]
+    },
+    "book": {
+      "on": "idle",
+      "layer_mode": "full",
+      "frame_ms": 700,
+      "breathe": {
+        "period_ms": 3600,
+        "pt": 1.2
+      }
+    },
+    "camera": {
+      "on": "milestone",
+      "layer_mode": "full",
+      "frame_ms": 350,
+      "fx": [
+        {
+          "layer": "fx/white",
+          "kind": "flash",
+          "anchor": [
+            512,
+            512
+          ],
+          "period_ms": 300,
+          "delay_ms": 400
+        }
+      ]
+    },
+    "guitar": {
+      "on": "gesture",
+      "layer_mode": "full",
+      "frame_ms": 350,
+      "duration_ms": 3000,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "sway",
+          "pt": 1.5,
+          "period_ms": 800
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/note_a",
+          "kind": "float",
+          "anchor": [
+            202,
+            257
+          ],
+          "period_ms": 1400,
+          "rise_pt": 16
+        },
+        {
+          "layer": "fx/note_b",
+          "kind": "float",
+          "anchor": [
+            875,
+            270
+          ],
+          "period_ms": 1400,
+          "phase": 0.5,
+          "rise_pt": 16
+        }
+      ]
+    }
+  },
+  "_timing": {
+    "ambient_every_s": [
+      60,
+      120
+    ]
+  }
 }

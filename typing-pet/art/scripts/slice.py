@@ -11,6 +11,12 @@
 - fx/mouse_arm: 팔/손/마우스만 잘라낸 그림. 앱이 어깨(root)에서 손끝(tip)으로 갈수록 크게 휘게 그린다.
 - paw_r/mouse_bg: 팔을 치운 바탕. 팔이 움직이면 드러나는 마우스패드 자리는 base 에서 마우스를 지워 채운다.
 
+캐릭터 고유 행동 (docs/CHARACTER_BEHAVIOR_PLAN.md):
+- mask/body: 머리 + 앞발 마스크를 넓힌 것. 몸 전체 움직임(hop, tremble 등)을 이 안으로 한정한다 (책상은 제자리).
+- base_clean: picks.json 에 "base_clean" 이 있으면 캐릭터를 지운 책상 그림. 몸이 움직여 드러나는 자리를 채운다.
+- fx/white: behavior 가 쓰면 base 실루엣 모양 흰색 (flash 소품).
+- picks.json 의 "_behaviors" -> [[behavior]], "_scenes" -> [[scene]], "_timing"/"_anim" -> [timing]/[anim].
+
 사용법: slice.py [--name usagi] [--feather 6]
 
 캐릭터별 폴더 art/<이름>/ 의 work/, masks/, picks.json 을 읽는다.
@@ -297,39 +303,127 @@ def toml_val(v) -> str:
     raise TypeError(v)
 
 
+# 표 이름 -> 하위 표 (목록이면 [[x.k]], 하나면 [x.k])
+SUB_LISTS = ("step", "fx", "motion")
+SUB_TABLES = ("breathe", "head")
+
+
+def entry_layers(e: dict) -> list[str]:
+    head = e.get("head", {})
+    return (list(e.get("frames", [])) + [st["frame"] for st in e.get("step", [])] + [f["layer"] for f in e.get("fx", [])]
+            + ([head["layer"]] if "layer" in head else []) + list(head.get("frames", [])))
+
+
+def table_toml(kind: str, name: str, e: dict, names: list[str], full: bool) -> str | None:
+    """[[scene]] 이나 [[behavior]] 하나. full 인데 frames/step 이 없으면 full/<name>_a, _b .. (만들어진 레이어만)."""
+    lines = [f'name = "{name}"'] + [f"{k} = {toml_val(e[k])}" for k in ("trigger", "on") if k in e]
+    if full and "frames" not in e and "step" not in e:
+        frames = sorted(n for n in names if n.startswith(f"full/{name}_"))
+        if not frames:
+            print(f"{kind} {name}: 프레임 없음, 건너뜀")
+            return None
+        lines.append("frames = " + toml_val(frames))
+    missing = [x for x in entry_layers(e) if x not in names]
+    if missing:
+        print(f"{kind} {name}: 없는 레이어 {missing}, 건너뜀")
+        return None
+    for k, v in e.items():
+        if k not in SUB_LISTS + SUB_TABLES + ("trigger", "on"):
+            lines.append(f"{k} = {toml_val(v)}")
+    body = f"\n[[{kind}]]\n" + "\n".join(lines) + "\n"
+    for k in SUB_TABLES:
+        if k in e:
+            body += f"\n[{kind}.{k}]\n" + "".join(f"{a} = {toml_val(b)}\n" for a, b in e[k].items())
+    for k in SUB_LISTS:
+        for item in e.get(k, []):
+            body += f"\n[[{kind}.{k}]]\n" + "".join(f"{a} = {toml_val(b)}\n" for a, b in item.items())
+    return body
+
+
 def scenes_toml(picks: dict, names: list[str]) -> str:
-    """picks.json 의 "_scenes" -> [[scene]] 표.
+    """picks.json 의 "_scenes" -> [[scene]] 표 (예전 형식, 그대로 읽힌다).
 
     예: {"eat": {"trigger": "idle", "frame_ms": 450}} 이면 프레임은 full/eat_a, full/eat_b .. 순서 (만들어진 레이어만).
     "step": [{"frame", "ms", "blend_ms"}], "breathe": {...}, "fx": [{...}] 가 있으면 [[scene.step]] [scene.breathe] [[scene.fx]] 로 쓴다.
     """
-    out = []
-    for name, sc in picks.get("_scenes", {}).items():
-        lines = [f'name = "{name}"', f'trigger = "{sc["trigger"]}"']
-        if "step" not in sc:
-            frames = sorted(n for n in names if n.startswith(f"full/{name}_"))
-            if not frames:
-                print(f"장면 {name}: 프레임 없음, 건너뜀")
-                continue
-            lines.append("frames = " + toml_val(frames))
-        missing = [x for x in [st["frame"] for st in sc.get("step", [])] + [f["layer"] for f in sc.get("fx", [])] if x not in names]
-        if missing:
-            print(f"장면 {name}: 없는 레이어 {missing}, 건너뜀")
-            continue
-        for k, v in sc.items():
-            if k not in ("trigger", "step", "breathe", "fx"):
-                lines.append(f"{k} = {toml_val(v)}")
-        body = "\n[[scene]]\n" + "\n".join(lines) + "\n"
-        if "breathe" in sc:
-            body += "\n[scene.breathe]\n" + "".join(f"{k} = {toml_val(v)}\n" for k, v in sc["breathe"].items())
-        for st in sc.get("step", []):
-            body += "\n[[scene.step]]\n" + "".join(f"{k} = {toml_val(v)}\n" for k, v in st.items())
-        for fx in sc.get("fx", []):
-            body += "\n[[scene.fx]]\n" + "".join(f"{k} = {toml_val(v)}\n" for k, v in fx.items())
-        out.append(body)
+    out = [b for name, sc in picks.get("_scenes", {}).items() if (b := table_toml("scene", name, sc, names, True))]
     if not out:
         return ""
     return "\n# 애니 장면: trigger(gesture=과열이 식을 때, idle=한동안 입력 없음, milestone=키 N번째). step/breathe/fx 는 characters/README.md\n" + "".join(out)
+
+
+def behaviors_toml(picks: dict, names: list[str]) -> str:
+    """picks.json 의 "_behaviors" -> [[behavior]] 표.
+
+    예: {"ura": {"on": "level:excited", "duration_ms": 900, "fx": [...], "motion": [...]}}.
+    layer_mode 가 "full" 이거나 frames/step 이 있으면 전체 프레임. full 인데 frames 가 없으면 full/<이름>_a, _b ..
+    "head": {"layer" | "frames", "frame_ms"} 는 [behavior.head] 로 쓴다.
+    """
+    out = []
+    for name, b in picks.get("_behaviors", {}).items():
+        full = b.get("layer_mode") == "full" or "frames" in b or "step" in b
+        if (t := table_toml("behavior", name, b, names, full)):
+            out.append(t)
+    if not out:
+        return ""
+    return "\n# 캐릭터 고유 행동: on(cue), 표현(layer_mode, motion, fx, head). characters/README.md, art/<이름>/BEHAVIORS.md\n" + "".join(out)
+
+
+def section_toml(picks: dict, key: str, table: str) -> str:
+    """picks.json 의 "_timing"/"_anim" -> [timing]/[anim] (성격 타이밍)."""
+    d = picks.get(key)
+    if not d:
+        return ""
+    return f"\n[{table}]\n" + "".join(f"{k} = {toml_val(v)}\n" for k, v in d.items())
+
+
+def uses_layer(picks: dict, layer: str) -> bool:
+    return any(layer in entry_layers(e) for sec in ("_scenes", "_behaviors") for e in picks.get(sec, {}).values())
+
+
+def keyboard_ramp(shape, size: int, tips: dict) -> np.ndarray:
+    """키보드 윗줄(앞발 끝 좌표) 위는 1, 아래는 0 인 세로 램프. 몸이 움직여도 그 아래(책상/키보드)는 제자리."""
+    tip_y = [v[1] for k, v in tips.items() if k in ("paw_l/down", "paw_r/down", "paw_r/center")]
+    if not tip_y:
+        return np.ones(shape, np.float32)
+    cut, fade = min(tip_y) - size * 0.02, size * 0.02
+    yy = np.arange(shape[0], dtype=np.float32)[:, None]
+    return np.broadcast_to(np.clip((cut - yy) / fade, 0, 1), shape).astype(np.float32)
+
+
+def body_mask(masks: dict, size: int, tips: dict) -> tuple[np.ndarray, list[float]]:
+    """몸 마스크와 몸 기준점 (머리 가운데 x, 몸 아래 끝 y).
+
+    머리와 앞발 사이 몸통을 메우고, 키보드 윗줄 아래는 서서히 뺀다 (책상/키보드는 제자리).
+    앞발 마스크는 같은 선에서 위(paw_*_top, 몸과 같이 움직임)와 아래(paw_*_low, 제자리)로 나눈다.
+    """
+    paws = np.maximum(masks["paw_l"], masks["paw_r"])
+    ramp = keyboard_ramp(paws.shape, size, tips)
+    # 구멍 없는 한 덩어리: 키보드 윗줄 위의 머리 + 팔을 볼록 껍질로 감싸고, 몸 폭(머리 폭 + 여유)으로 자른다.
+    # 구멍이 있으면 가장자리 페더링 때문에 제자리 그림과 옮긴 그림이 반씩 비쳐 이음선이 생긴다
+    u = ((np.maximum(masks["head"], paws) > 0.5) & (ramp > 0)).astype(np.uint8)
+    m = np.zeros_like(u)
+    cv2.fillConvexPoly(m, cv2.convexHull(cv2.findNonZero(u)), 1)
+    # 몸통은 머리/팔 마스크보다 옆으로 불룩하다 (치이카와 아래쪽 등). 넉넉히 넓힌 뒤 소품(연필꽂이, 병)이 안 들어가게 폭을 자른다
+    g = max(5, size // 25)
+    m = cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (g * 2 + 1, g * 2 + 1)))
+    _, hx = np.nonzero(masks["head"] > 0.5)
+    pad = size // 20
+    m[:, : max(0, hx.min() - pad)] = 0
+    m[:, hx.max() + pad :] = 0
+    r = max(3, size // 100)
+    m = cv2.GaussianBlur(m.astype(np.float32), (r * 2 + 1, r * 2 + 1), r / 2) * ramp
+    ys, _ = np.nonzero(m > 0.5)
+    return m, [round(float(hx.mean()), 1), round(float(ys.max()), 1)]
+
+
+def split_paw_masks(masks: dict, size: int, tips: dict) -> dict:
+    ramp = keyboard_ramp(masks["paw_l"].shape, size, tips)
+    out = {}
+    for g in ("paw_l", "paw_r"):
+        out[f"{g}_top"] = masks[g] * ramp
+        out[f"{g}_low"] = masks[g] * (1 - ramp)
+    return out
 
 
 def main() -> None:
@@ -367,6 +461,8 @@ def main() -> None:
     for x, y in [("head", "paw_l"), ("head", "paw_r"), ("paw_l", "paw_r")]:
         ov = np.minimum(masks[x], masks[y]).max()
         print(f"마스크 겹침 {x}/{y}: 최대 {ov:.3f}")
+    masks["body"], body_anchor = body_mask(masks, masks["head"].shape[0], geo["tips"])
+    masks.update(split_paw_masks(masks, masks["head"].shape[0], geo["tips"]))
     for g, m in masks.items():
         save_layer(out, f"mask/{g}", np.dstack([(m * 255).astype(np.uint8)] * 3 + [np.full(m.shape, 255, np.uint8)]))
 
@@ -398,7 +494,12 @@ def main() -> None:
     for f in sorted((WORK / "fx").glob("*.png")) if (WORK / "fx").is_dir() else []:
         save_layer(out, f"fx/{f.stem}", np.array(Image.open(f).convert("RGBA")))
         names.append(f"fx/{f.stem}")
-    names += ["mask/head", "mask/paw_l", "mask/paw_r"]
+    # 플래시 소품: base 실루엣 모양 흰색 (behavior 가 쓸 때만)
+    if uses_layer(picks, "fx/white"):
+        alpha = np.array(Image.open(WORK / "base.png").convert("RGBA"))[..., 3]
+        save_layer(out, "fx/white", np.dstack([np.full(alpha.shape, 255, np.uint8)] * 3 + [alpha]))
+        names.append("fx/white")
+    names += ["mask/head", "mask/paw_l", "mask/paw_r", "mask/body", "mask/paw_l_top", "mask/paw_l_low", "mask/paw_r_top", "mask/paw_r_low"]
 
     order = ["base", "head/", "paw_l/", "paw_r/", "fx/", "full/", "mask/"]
     names.sort(key=lambda n: (next(i for i, p in enumerate(order) if n.startswith(p)), n))
@@ -415,15 +516,21 @@ layers = [
 {layers},
 ]
 head_anchor = [{ha[0]}, {ha[1]}]
+body_anchor = [{body_anchor[0]}, {body_anchor[1]}]
 
 [masks]
 head = "mask/head"
 paw_l = "mask/paw_l"
 paw_r = "mask/paw_r"
+body = "mask/body"
+paw_l_top = "mask/paw_l_top"
+paw_l_low = "mask/paw_l_low"
+paw_r_top = "mask/paw_r_top"
+paw_r_low = "mask/paw_r_low"
 
 [tips]
 {tips}
-{swing_toml(swing)}{scenes_toml(picks, names)}""",
+{swing_toml(swing)}{section_toml(picks, "_timing", "timing")}{section_toml(picks, "_anim", "anim")}{scenes_toml(picks, names)}{behaviors_toml(picks, names)}""",
         encoding="utf-8",
     )
     print(f"{out.relative_to(ROOT)}: 레이어 {len(names)}장")
