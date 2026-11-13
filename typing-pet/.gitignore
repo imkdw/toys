@@ -9,6 +9,7 @@
 /art/*/raw/
 /art/*/prompts/
 /art/*/masks/
+/art/_desk/
 /art/.venv/
 __pycache__/
 /art/*/work/

@@ -120,23 +120,6 @@
         }
       ]
     },
-    "hello": {
-      "on": "wake",
-      "duration_ms": 900,
-      "cooldown_s": 20,
-      "head": {
-        "layer": "head/tongue"
-      },
-      "motion": [
-        {
-          "target": "body",
-          "kind": "hop",
-          "pt": 4,
-          "period_ms": 450,
-          "count": 1
-        }
-      ]
-    },
     "book": {
       "on": "idle",
       "layer_mode": "full",
@@ -199,6 +182,23 @@
           "rise_pt": 16
         }
       ]
+    },
+    "tongue_tap": {
+      "on": "prop",
+      "duration_ms": 1000,
+      "cooldown_s": 2,
+      "head": {
+        "layer": "head/tongue"
+      },
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2.5,
+          "period_ms": 450,
+          "count": 1
+        }
+      ]
     }
   },
   "_timing": {
@@ -206,5 +206,14 @@
       60,
       120
     ]
+  },
+  "desk_empty": "desk_empty_1",
+  "_expressions": {
+    "head/excited": "e169-007 입 벌리고 노래하는 얼굴",
+    "head/overheat": "e112-015 눈 감고 웃는 얼굴, e010-005 '어떻게든 되겠지'",
+    "head/tongue": "e169-007 입 벌린 웃음"
+  },
+  "_desk": {
+    "item": "camera"
   }
 }

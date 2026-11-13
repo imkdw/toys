@@ -111,8 +111,8 @@ def main() -> None:
     paws = dilate(masks["paw_l"] | masks["paw_r"], 2 * FEATHER)
     masks["head"] &= cv2.bitwise_not(paws)
     # 선글라스: 차이 영역 중 어두운 픽셀
-    sg = WORK / "matched" / f"{picks['head/sunglasses']}.png"
-    if sg.exists() and "head/sunglasses" in diffs:
+    sg = WORK / "matched" / f"{picks.get('head/sunglasses', '')}.png"
+    if "head/sunglasses" in picks and sg.exists() and "head/sunglasses" in diffs:
         v = load(sg)
         dark = (v[..., :3].max(axis=-1) < 70) & (v[..., 3] > 200)
         m = (dark & (dilate(diffs["head/sunglasses"], 4) > 0)).astype(np.uint8) * 255

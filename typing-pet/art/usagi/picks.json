@@ -22,21 +22,6 @@
           "frame": "full/sleep_a",
           "ms": 7000,
           "blend_ms": 700
-        },
-        {
-          "frame": "full/sleep_rem_a",
-          "ms": 1400,
-          "blend_ms": 250
-        },
-        {
-          "frame": "full/sleep_rem_b",
-          "ms": 1100,
-          "blend_ms": 250
-        },
-        {
-          "frame": "full/sleep_rem_a",
-          "ms": 1200,
-          "blend_ms": 700
         }
       ],
       "breathe": {
@@ -113,15 +98,6 @@
       "duration_ms": 1100,
       "cooldown_s": 15,
       "priority": 20,
-      "motion": [
-        {
-          "target": "body",
-          "kind": "hop",
-          "pt": 6,
-          "period_ms": 450,
-          "count": 1
-        }
-      ],
       "fx": [
         {
           "layer": "fx/ura",
@@ -159,17 +135,9 @@
       "motion": [
         {
           "target": "body",
-          "kind": "squash",
-          "squash": 0.06,
-          "period_ms": 350,
-          "count": 2
-        },
-        {
-          "target": "head",
-          "kind": "nod",
-          "pt": 3,
-          "period_ms": 350,
-          "count": 2
+          "kind": "tremble",
+          "pt": 2,
+          "period_ms": 50
         }
       ]
     },
@@ -206,20 +174,6 @@
         }
       ]
     },
-    "bounce": {
-      "on": "burst",
-      "duration_ms": 800,
-      "cooldown_s": 4,
-      "motion": [
-        {
-          "target": "body",
-          "kind": "hop",
-          "pt": 5,
-          "period_ms": 380,
-          "count": 2
-        }
-      ]
-    },
     "ear_perk": {
       "on": "ambient",
       "duration_ms": 900,
@@ -236,17 +190,7 @@
     "yaha": {
       "on": "milestone",
       "layer_mode": "full",
-      "frame_ms": 300,
       "duration_ms": 2500,
-      "motion": [
-        {
-          "target": "body",
-          "kind": "hop",
-          "pt": 5,
-          "period_ms": 600,
-          "count": 2
-        }
-      ],
       "fx": [
         {
           "layer": "fx/yaha",
@@ -262,6 +206,9 @@
             1.0
           ]
         }
+      ],
+      "frames": [
+        "full/yaha_a"
       ]
     },
     "staff": {
@@ -277,6 +224,14 @@
           "period_ms": 700
         }
       ]
+    },
+    "ura_tap": {
+      "on": "prop",
+      "duration_ms": 900,
+      "cooldown_s": 2,
+      "head": {
+        "layer": "head/excited"
+      }
     }
   },
   "_timing": {
@@ -289,5 +244,21 @@
   },
   "_anim": {
     "pop_scale": 1.08
-  }
+  },
+  "desk_empty": "desk_empty_1",
+  "_expressions": {
+    "head/excited": "e066-007, e015-014 '우라!' 입 크게 벌린 얼굴",
+    "head/haa": "e036-024 '하아?'"
+  },
+  "_desk": {
+    "item": "pudding"
+  },
+  "_erase": [
+    [
+      498,
+      528,
+      534,
+      560
+    ]
+  ]
 }

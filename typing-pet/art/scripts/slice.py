@@ -17,6 +17,15 @@
 - fx/white: behavior 가 쓰면 base 실루엣 모양 흰색 (flash 소품).
 - picks.json 의 "_behaviors" -> [[behavior]], "_scenes" -> [[scene]], "_timing"/"_anim" -> [timing]/[anim].
 
+표정/책상 소품:
+- "_expressions": {"head/<이름>": "<애니 근거>"} -> [expressions]. 여기 없는 머리는 앱이 그리지 않는다 (head/normal 은 항상).
+- "_desk": {"item": "<소품 id>"} -> [desk]. 소품 그림은 characters/_props (make_props.py) 를 모든 캐릭터가 같이 쓴다.
+  장면 프레임(full/*)이 소품 자리를 덮으면 [desk.hide] 에 그 자리를 적어 그 프레임 동안 소품을 숨긴다.
+- "desk_empty": "<후보>" 가 있으면 (예전에 책상 소품까지 그려 넣은 캐릭터) 모든 레이어에서 소품 자리(art/_desk/item_mask.png)를
+  빈 책상으로 바꾼다. 장면 프레임은 캐릭터가 덮은 곳(base 와 달라진 곳)은 그대로 둔다.
+- "_erase": [[x0, y0, x1, y1], ..]: base 에 잘못 그려진 자국(예: 입 아래 떠 있는 선)을 상자 안 피부색으로 지운다.
+  변형 그림도 그 상자 안에서 base 와 같은 곳만 같이 지운다 (표정이 바뀐 곳은 그대로).
+
 사용법: slice.py [--name usagi] [--feather 6]
 
 캐릭터별 폴더 art/<이름>/ 의 work/, masks/, picks.json 을 읽는다.
@@ -377,6 +386,94 @@ def section_toml(picks: dict, key: str, table: str) -> str:
     return f"\n[{table}]\n" + "".join(f"{k} = {toml_val(v)}\n" for k, v in d.items())
 
 
+def expressions_toml(picks: dict, names: list[str]) -> str:
+    """picks.json 의 "_expressions" -> [expressions]. 레이어가 없는 표정은 뺀다."""
+    ex = {k: v for k, v in picks.get("_expressions", {}).items() if k in names}
+    for k in picks.get("_expressions", {}):
+        if k not in names:
+            print(f"표정 {k}: 레이어 없음, 뺌")
+    if not ex:
+        return "\n# 애니에 나온 표정만 그린다 (head/normal 만 허용)\n[expressions]\n"
+    return "\n# 애니에 나온 표정만 그린다: 머리 레이어 = 근거. 여기 없는 머리는 그리지 않는다\n[expressions]\n" + "".join(
+        f"{toml_val(k)} = {toml_val(v)}\n" for k, v in ex.items())
+
+
+def desk_slots() -> dict:
+    """소품 자리별 상자 (캔버스 px): foot 기준 max 크기."""
+    spec = json.loads((ROOT / "art/_props/props.json").read_text())
+    out = {}
+    for name, sl in spec["slots"].items():
+        (fx, fy), (w, h) = sl["foot"], sl["max"]
+        out[name] = (int(fx - w / 2), int(fy - h), int(fx + w / 2), int(fy))
+    return out
+
+
+def desk_toml(picks: dict, hide: dict) -> str:
+    d = picks.get("_desk")
+    if not d and not hide:
+        return ""
+    body = "\n# 책상 소품: 캐릭터 소품(item)과 장면 프레임이 덮는 자리(hide). characters/_props/props.toml\n[desk]\n"
+    if d and d.get("item"):
+        body += f"item = {toml_val(d['item'])}\n"
+    if hide:
+        body += "\n[desk.hide]\n" + "".join(f"{toml_val(k)} = {toml_val(v)}\n" for k, v in sorted(hide.items()))
+    return body
+
+
+def erase_marks(boxes: list) -> None:
+    """base 의 자국을 지우고, 변형 그림은 상자 안에서 원래 base 와 같은 곳만 같이 지운다."""
+    bp = WORK / "base.png"
+    base = np.array(Image.open(bp).convert("RGBA"))
+    orig = base.copy()
+    for x0, y0, x1, y1 in boxes:
+        reg = base[y0:y1, x0:x1, :3].astype(int)
+        lum = reg.sum(-1)
+        skin = np.median(reg[lum >= np.percentile(lum, 60)], axis=0)
+        off = np.abs(reg - skin).sum(-1) > 6
+        reg[off] = skin
+        base[y0:y1, x0:x1, :3] = reg
+    Image.fromarray(base, "RGBA").save(bp)
+    for vp in sorted((WORK / "matched").glob("*.png")):
+        v = np.array(Image.open(vp).convert("RGBA"))
+        changed_any = False
+        for x0, y0, x1, y1 in boxes:
+            same = np.abs(v[y0:y1, x0:x1, :3].astype(int) - orig[y0:y1, x0:x1, :3].astype(int)).sum(-1) < 60
+            if same.any():
+                v[y0:y1, x0:x1, :3][same] = base[y0:y1, x0:x1, :3][same]
+                changed_any = True
+        if changed_any:
+            Image.fromarray(v, "RGBA").save(vp)
+    print(f"자국 지움: {boxes}")
+
+
+def declutter(out: Path, names: list[str], empty: np.ndarray, chg: dict) -> dict:
+    """예전 책상 소품을 모든 레이어에서 지우고, 장면 프레임마다 캐릭터가 덮는 소품 자리를 돌려준다."""
+    m = np.array(Image.open(ROOT / "art/_desk/item_mask.png").convert("L")).astype(np.float32) / 255
+    m = cv2.GaussianBlur(m, (9, 9), 3)
+    slots = desk_slots()
+    hide = {}
+    for n in names:
+        if n.startswith(("mask/", "fx/")):
+            continue
+        p = out / "layers" / f"{n}.png"
+        v = np.array(Image.open(p).convert("RGBA")).astype(np.float32)
+        w = m.copy()
+        if n in chg:
+            # 캐릭터가 덮은 곳(달라진 곳)은 그대로. 넓혀서 팔 가장자리도 남긴다
+            c = cv2.dilate((chg[n] > 0.05).astype(np.uint8), np.ones((9, 9), np.uint8)).astype(np.float32)
+            w *= 1 - c
+            if n.startswith("full/"):
+                covered = [s for s, (x0, y0, x1, y1) in slots.items() if c[y0:y1, x0:x1].sum() > 150]
+                if covered:
+                    hide[n] = covered
+        w *= v[..., 3] > 0
+        # premultiplied 로 섞는다 (책상 위로 솟은 소품 자리는 빈 책상에선 투명이라 알파도 같이 바뀐다)
+        v = blend(v.astype(np.uint8), empty.astype(np.uint8), w)
+        Image.fromarray(v, "RGBA").save(p, optimize=False, compress_level=3)
+    print(f"예전 책상 소품 지움, 소품을 숨길 장면 프레임: {hide}")
+    return hide
+
+
 def uses_layer(picks: dict, layer: str) -> bool:
     return any(layer in entry_layers(e) for sec in ("_scenes", "_behaviors") for e in picks.get(sec, {}).values())
 
@@ -435,9 +532,12 @@ def main() -> None:
     set_char(a.name)
     picks = json.loads((ROOT / "art" / a.name / "picks.json").read_text())
     geo = json.loads((WORK / "geometry.json").read_text())
+    if picks.get("_erase"):
+        erase_marks(picks["_erase"])
 
     masks = {g: feathered(g, a.feather) for g in ["head", "paw_l", "paw_r"]}
-    srcs = {k: WORK / "matched" / f"{v}.png" for k, v in picks.items() if not k.startswith("_") and k != "base"}
+    NOT_LAYERS = ("base", "desk_empty")
+    srcs = {k: WORK / "matched" / f"{v}.png" for k, v in picks.items() if not k.startswith("_") and k not in NOT_LAYERS}
     srcs = {k: p for k, p in srcs.items() if p.exists()}
     # 앞발/제스처: base 와 실제로 달라진 곳만 변형을 쓴다. 앞발 마스크가 달라진 곳을 다 덮도록 넓힌다
     chg_layers = [k for k in srcs if k.split("/")[0] in ("paw_l", "paw_r", "full")]
@@ -469,7 +569,7 @@ def main() -> None:
     jobs = [(out, "base", WORK / "base.png", None, None), (out, "head/normal", WORK / "base.png", masks["head"], None),
             (out, "paw_l/up", WORK / "base.png", masks["paw_l"], None), (out, "paw_r/up", WORK / "base.png", masks["paw_r"], None)]
     for layer, raw in picks.items():
-        if layer.startswith("_") or layer == "base":
+        if layer.startswith("_") or layer in NOT_LAYERS:
             continue
         if layer not in srcs:
             print(f"없음, 건너뜀: {layer} <- {raw}.png")
@@ -499,6 +599,11 @@ def main() -> None:
         alpha = np.array(Image.open(WORK / "base.png").convert("RGBA"))[..., 3]
         save_layer(out, "fx/white", np.dstack([np.full(alpha.shape, 255, np.uint8)] * 3 + [alpha]))
         names.append("fx/white")
+    hide = {}
+    if "desk_empty" in picks:
+        empty = np.array(Image.open(WORK / "matched" / f"{picks['desk_empty']}.png").convert("RGBA")).astype(np.float32)
+        layer_names = [n for n in names if (out / "layers" / f"{n}.png").exists()]
+        hide = declutter(out, layer_names, empty, chg)
     names += ["mask/head", "mask/paw_l", "mask/paw_r", "mask/body", "mask/paw_l_top", "mask/paw_l_low", "mask/paw_r_top", "mask/paw_r_low"]
 
     order = ["base", "head/", "paw_l/", "paw_r/", "fx/", "full/", "mask/"]
@@ -530,7 +635,7 @@ paw_r_low = "mask/paw_r_low"
 
 [tips]
 {tips}
-{swing_toml(swing)}{section_toml(picks, "_timing", "timing")}{section_toml(picks, "_anim", "anim")}{scenes_toml(picks, names)}{behaviors_toml(picks, names)}""",
+{swing_toml(swing)}{section_toml(picks, "_timing", "timing")}{section_toml(picks, "_anim", "anim")}{expressions_toml(picks, names)}{desk_toml(picks, hide)}{scenes_toml(picks, names)}{behaviors_toml(picks, names)}""",
         encoding="utf-8",
     )
     print(f"{out.relative_to(ROOT)}: 레이어 {len(names)}장")

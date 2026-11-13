@@ -13,7 +13,6 @@
 | "어떻게든 되겠지!" | 10화 e010-005 | `level:overheat` enter | overlay, 머리 nod, 말풍선 pop_in | head/overheat 를 땀 흘리며 웃는 얼굴로, fx/nantoka |
 | 흥얼거리기 | 112화 e112-015, 205화 e205-017 | `level:excited` hold | overlay, 음표 2개 float (위상 엇갈림) + 머리 sway | fx/note_a, fx/note_b |
 | 혀 내밀고 웃기 | 169화 e169-007 | `ambient` | overlay, 머리 바꾸기 짧게 | head/tongue |
-| 반가워 | 112화 e112-015 | `wake` | overlay, 몸 hop + 머리 바꾸기(혀) | head/tongue |
 | 책 읽기 | 201화 e201-022 | `idle` | full, 2장 교대 + 숨쉬기 | 기존 |
 | 사진 찍기 | 216화 e216-005, 37화 | `milestone` | full, 2장 교대 + 플래시 | fx/white (자동) |
 | 기타 치며 노래 | 169화 e169-007 | `gesture` | full, 2장 교대 + 음표 float + 몸 sway | fx/note_a, fx/note_b |
