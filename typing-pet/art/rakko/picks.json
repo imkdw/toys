@@ -1,0 +1,271 @@
+{
+  "_comment": "레이어 이름 -> art/rakko/raw 의 생성 파일 (확장자 제외). *_pil 은 생성 한도 때문에 stopgap/make.py 로 만든 임시 레이어 (말풍선/번개/베기/입김). 남은 생성은 stopgap/regen.sh.",
+  "_title": "랏코",
+  "base": "base_final",
+  "paw_l/down": "left_down_1",
+  "paw_r/down": "right_down_1",
+  "base_clean": "base_clean_1",
+  "_expressions": {
+    "head/excited": "e52@0:05 입 벌린 웃음 (한쪽 눈썹 살짝 찡긋, 혀 보이는 웃는 입)",
+    "head/overheat": "e53@0:16 굳은 짧은 눈썹의 진지한 얼굴 (화난 얼굴 아님)"
+  },
+  "_fx": {
+    "order": {
+      "src": "behavior_order_bubble_pil",
+      "ref": "base_final"
+    },
+    "joa": {
+      "src": "behavior_joa_bubble_pil",
+      "ref": "base_final"
+    },
+    "hurry": {
+      "src": "behavior_hurry_bubble_pil",
+      "ref": "base_final"
+    },
+    "thanks": {
+      "src": "behavior_thanks_bubble_pil",
+      "ref": "base_final"
+    },
+    "bolt": {
+      "src": "behavior_bolt_pil",
+      "ref": "base_final"
+    },
+    "slash": {
+      "src": "behavior_slash_pil",
+      "ref": "base_final"
+    },
+    "puff": {
+      "src": "behavior_puff_pil",
+      "ref": "base_final"
+    }
+  },
+  "_behaviors": {
+    "rakko_order": {
+      "on": "idle",
+      "layer_mode": "overlay",
+      "duration_ms": 6000,
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2.0,
+          "period_ms": 900,
+          "count": 2,
+          "delay_ms": 1400
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/order",
+          "kind": "pop_in",
+          "anchor": [
+            780,
+            300
+          ],
+          "period_ms": 2600,
+          "scale": [
+            0.3,
+            1.0
+          ]
+        }
+      ]
+    },
+    "rakko_slash": {
+      "on": "milestone",
+      "layer_mode": "overlay",
+      "duration_ms": 1600,
+      "fx": [
+        {
+          "layer": "fx/slash",
+          "kind": "flash",
+          "anchor": [
+            525,
+            325
+          ],
+          "period_ms": 700,
+          "delay_ms": 250
+        }
+      ]
+    },
+    "rakko_puff": {
+      "on": "gesture",
+      "layer_mode": "overlay",
+      "duration_ms": 2400,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "squash",
+          "squash": 0.04,
+          "period_ms": 1200,
+          "count": 1
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/puff",
+          "kind": "float",
+          "anchor": [
+            512,
+            520
+          ],
+          "period_ms": 2000,
+          "rise_pt": 10
+        }
+      ]
+    },
+    "rakko_bolt": {
+      "on": "wake",
+      "duration_ms": 1000,
+      "cooldown_s": 30,
+      "fx": [
+        {
+          "layer": "fx/bolt",
+          "kind": "flash",
+          "anchor": [
+            860,
+            290
+          ],
+          "period_ms": 600
+        }
+      ]
+    },
+    "rakko_joa": {
+      "on": "level:excited",
+      "duration_ms": 1600,
+      "cooldown_s": 25,
+      "fx": [
+        {
+          "layer": "fx/joa",
+          "kind": "pop_in",
+          "anchor": [
+            780,
+            300
+          ],
+          "period_ms": 1500,
+          "scale": [
+            0.3,
+            1.0
+          ]
+        }
+      ],
+      "head": {
+        "layer": "head/excited"
+      }
+    },
+    "rakko_focus": {
+      "on": "level:overheat",
+      "duration_ms": 1800,
+      "cooldown_s": 20,
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2.5,
+          "period_ms": 900,
+          "count": 1
+        }
+      ],
+      "head": {
+        "layer": "head/overheat"
+      }
+    },
+    "rakko_hurry": {
+      "on": "burst",
+      "duration_ms": 1400,
+      "cooldown_s": 40,
+      "chance": 0.7,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "sway",
+          "pt": 2.5,
+          "period_ms": 260,
+          "count": 3
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/hurry",
+          "kind": "pop_in",
+          "anchor": [
+            780,
+            300
+          ],
+          "period_ms": 1300,
+          "scale": [
+            0.3,
+            1.0
+          ]
+        }
+      ]
+    },
+    "rakko_nod": {
+      "on": "ambient",
+      "duration_ms": 1600,
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2.0,
+          "period_ms": 700,
+          "count": 2
+        }
+      ]
+    },
+    "rakko_thanks": {
+      "on": "prop",
+      "duration_ms": 1500,
+      "cooldown_s": 3,
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2.5,
+          "period_ms": 600,
+          "count": 1
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/thanks",
+          "kind": "pop_in",
+          "anchor": [
+            780,
+            300
+          ],
+          "period_ms": 1400,
+          "scale": [
+            0.3,
+            1.0
+          ]
+        }
+      ]
+    }
+  },
+  "_timing": {
+    "level_up": [
+      15,
+      26,
+      38
+    ],
+    "paw_down_ms": 100,
+    "wake_after_s": 20,
+    "burst_keys": 11,
+    "ambient_every_s": [
+      90,
+      240
+    ]
+  },
+  "_anim": {
+    "pop_scale": 1.02,
+    "glow_ms": 200
+  },
+  "_desk": {
+    "item": "pouch"
+  },
+  "paw_r/center": "right_center_1",
+  "paw_r/mouse": "mouse_1",
+  "paw_r/mouse_click": "mouse_click_1",
+  "head/excited": "head_excited_1",
+  "head/overheat": "head_overheat_1"
+}

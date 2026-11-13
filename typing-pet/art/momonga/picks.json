@@ -1,0 +1,273 @@
+{
+  "_comment": "레이어 이름 -> art/momonga/raw 의 생성 파일 (확장자 제외).",
+  "_title": "모몽가",
+  "base": "base_2",
+  "paw_l/down": "left_down_1",
+  "paw_r/down": "right_down_1",
+  "head/smug": "head_smug_1",
+  "full/bwabwa_a": "scene_bwa_a_2",
+  "paw_r/center": "right_center_1",
+  "paw_r/mouse": "mouse_1",
+  "paw_r/mouse_click": "mouse_click_1",
+  "head/excited": "head_excited_2",
+  "head/overheat": "head_overheat_2",
+  "head/pout": "head_pout_2",
+  "full/bwabwa_b": "scene_bwa_b_openeyes",
+  "full/mochimochi_a": "scene_mochi_a_1",
+  "full/mochimochi_b": "scene_mochi_b_2",
+  "full/dadakko_a": "scene_tantrum_a_1",
+  "full/dadakko_b": "scene_tantrum_b_1",
+  "base_clean": "base_clean_2",
+  "_desk": {
+    "item": "mochi"
+  },
+  "_expressions": {
+    "head/excited": "e029@0:18 귀여운 척: 크고 촉촉한 눈에 반짝이 하이라이트, 입 ω",
+    "head/overheat": "e132@0:13 우는 척: 물결 모양으로 찡그린 눈 + 아래 눈물 맺힘/주르륵 (e132@0:04 도 같은 눈)",
+    "head/smug": "e132@0:05 뻔뻔한 반쯤 감은 눈 + 입꼬리 올라간 ω (e118@0:01)",
+    "head/pout": "e066@0:53 반쯤 감은 눈 + 미간 주름 + 입 삐죽 (밥 내놔)"
+  },
+  "_fx": {
+    "bwa": {
+      "src": "behavior_bwa_bubble_2",
+      "ref": "base_2"
+    },
+    "sparkle": {
+      "src": "behavior_sparkle_1",
+      "ref": "base_2"
+    },
+    "droplet": {
+      "src": "behavior_droplet_1",
+      "ref": "base_2"
+    }
+  },
+  "_behaviors": {
+    "mochimochi": {
+      "on": "idle",
+      "layer_mode": "full",
+      "frame_ms": 520,
+      "breathe": {
+        "period_ms": 3000,
+        "pt": 1.4
+      }
+    },
+    "bwabwa": {
+      "on": "milestone",
+      "layer_mode": "full",
+      "frame_ms": 380,
+      "fx": [
+        {
+          "layer": "fx/bwa",
+          "kind": "pop_in",
+          "anchor": [
+            250,
+            210
+          ],
+          "period_ms": 1400,
+          "scale": [
+            0.4,
+            1.0
+          ]
+        }
+      ]
+    },
+    "dadakko": {
+      "on": "gesture",
+      "duration_ms": 3000,
+      "head": {
+        "layer": "head/overheat"
+      },
+      "motion": [
+        {
+          "target": "body",
+          "kind": "tremble",
+          "pt": 1.4,
+          "period_ms": 70
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/droplet",
+          "kind": "fall",
+          "anchor": [
+            576,
+            516
+          ],
+          "period_ms": 800,
+          "rise_pt": 20
+        }
+      ]
+    },
+    "kirakira": {
+      "on": "level:excited",
+      "duration_ms": 1600,
+      "cooldown_s": 15,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "sway",
+          "pt": 3,
+          "period_ms": 800,
+          "count": 2
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/sparkle",
+          "kind": "pulse",
+          "anchor": [
+            211,
+            216
+          ],
+          "period_ms": 800,
+          "scale": [
+            0.6,
+            1.0
+          ]
+        }
+      ],
+      "head": {
+        "layer": "head/excited"
+      }
+    },
+    "usonaki": {
+      "on": "level:overheat",
+      "duration_ms": 2000,
+      "cooldown_s": 12,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "tremble",
+          "pt": 0.8,
+          "period_ms": 60
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/droplet",
+          "kind": "fall",
+          "anchor": [
+            576,
+            516
+          ],
+          "period_ms": 1000,
+          "rise_pt": 18
+        }
+      ],
+      "head": {
+        "layer": "head/overheat"
+      }
+    },
+    "jitabata": {
+      "on": "level:dizzy",
+      "when": "hold",
+      "duration_ms": 900,
+      "cooldown_s": 1.5,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "tremble",
+          "pt": 1.6,
+          "period_ms": 50
+        },
+        {
+          "target": "head",
+          "kind": "sway",
+          "pt": 2,
+          "period_ms": 300,
+          "count": 0
+        }
+      ]
+    },
+    "smirk": {
+      "on": "wake",
+      "duration_ms": 1400,
+      "cooldown_s": 20,
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2,
+          "period_ms": 600,
+          "count": 1
+        }
+      ],
+      "head": {
+        "layer": "head/smug"
+      }
+    },
+    "hmph": {
+      "on": "key:backspace",
+      "duration_ms": 700,
+      "cooldown_s": 8,
+      "chance": 0.5,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "squash",
+          "squash": 0.06,
+          "period_ms": 350,
+          "count": 1
+        }
+      ],
+      "head": {
+        "layer": "head/pout"
+      }
+    },
+    "lookatme": {
+      "on": "ambient",
+      "duration_ms": 1800,
+      "cooldown_s": 60,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "sway",
+          "pt": 3,
+          "period_ms": 900,
+          "count": 2
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/sparkle",
+          "kind": "pulse",
+          "anchor": [
+            211,
+            216
+          ],
+          "period_ms": 900,
+          "scale": [
+            0.5,
+            1.0
+          ]
+        }
+      ],
+      "head": {
+        "layer": "head/excited"
+      }
+    },
+    "snatch": {
+      "on": "prop",
+      "duration_ms": 1100,
+      "cooldown_s": 3,
+      "head": {
+        "layer": "head/smug"
+      }
+    }
+  },
+  "_timing": {
+    "level_up": [
+      10,
+      18,
+      28
+    ],
+    "wake_after_s": 12,
+    "ambient_every_s": [
+      60,
+      140
+    ]
+  },
+  "_anim": {
+    "pop_scale": 1.06
+  }
+}

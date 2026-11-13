@@ -1,0 +1,245 @@
+{
+  "_comment": "레이어 이름 -> art/kurimanju/raw 의 생성 파일 (확장자 제외). 재생성 후 고른 후보를 여기서 바꾼다. 근거는 BEHAVIORS.md",
+  "_title": "쿠리만쥬",
+  "base": "base_final",
+  "paw_l/down": "left_down_2",
+  "paw_r/down": "right_down_2",
+  "paw_r/center": "right_center_1",
+  "paw_r/mouse": "mouse_1",
+  "paw_r/mouse_click": "mouse_click_1",
+  "head/excited": "head_haa_1",
+  "head/dizzy": "head_flushed_1",
+  "head/overheat": "head_flushed_1",
+  "head/lick": "head_lick_1",
+  "head/savor": "head_savor_1",
+  "full/kuri_snack_a": "scene_snack_a_1",
+  "full/kuri_snack_b": "scene_snack_b_1",
+  "full/kuri_drink_a": "scene_haa_a_1",
+  "full/kuri_drink_b": "scene_haa_b_1",
+  "full/kuri_pass_a": "scene_pass_a_1",
+  "full/kuri_order_a": "scene_order_a_1",
+  "base_clean": "base_clean_1",
+  "_expressions": {
+    "head/excited": "e244@00:23, e35@00:09, e180@00:09: 한 모금 마신 뒤 입 크게 벌리고 송곳니 보이며 하아~ (입 위 주름선)",
+    "head/dizzy": "e242@00:11: 따끈한 어묵 국물에 볼이 발그레해지고 볼에서 김이 남",
+    "head/overheat": "e242@00:11: dizzy 와 같은 발그레 + 김 얼굴",
+    "head/lick": "e244@00:09: 안주를 보고 혀를 살짝 내밀어 입맛 다심",
+    "head/savor": "e244@00:12, e35@00:18: 입 위 주름선과 넓은 ω 입으로 맛을 음미"
+  },
+  "_desk": {
+    "item": "sake_cup"
+  },
+  "_fx": {
+    "kuri_steam": {
+      "src": "behavior_steam_clean",
+      "ref": "base_final"
+    },
+    "kuri_haa": {
+      "src": "behavior_haa_bubble_1",
+      "ref": "base_final"
+    }
+  },
+  "_behaviors": {
+    "kuri_snack": {
+      "on": "idle",
+      "layer_mode": "full",
+      "frame_ms": 700,
+      "breathe": {
+        "period_ms": 3600,
+        "pt": 1.2
+      }
+    },
+    "kuri_cheers": {
+      "on": "milestone",
+      "duration_ms": 3200,
+      "step": [
+        {
+          "frame": "full/kuri_drink_a",
+          "ms": 1400,
+          "blend_ms": 200
+        },
+        {
+          "frame": "full/kuri_drink_b",
+          "ms": 1800,
+          "blend_ms": 200
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/kuri_steam",
+          "kind": "float",
+          "anchor": [
+            831,
+            322
+          ],
+          "period_ms": 1600,
+          "delay_ms": 1500,
+          "rise_pt": 16
+        }
+      ]
+    },
+    "kuri_pass": {
+      "on": "gesture",
+      "layer_mode": "full",
+      "duration_ms": 2400
+    },
+    "kuri_order": {
+      "on": "wake",
+      "layer_mode": "full",
+      "duration_ms": 1300,
+      "cooldown_s": 30,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "sway",
+          "pt": 2,
+          "period_ms": 650,
+          "count": 1
+        }
+      ]
+    },
+    "kuri_haa": {
+      "on": "level:excited",
+      "duration_ms": 1600,
+      "cooldown_s": 20,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "squash",
+          "squash": 0.06,
+          "period_ms": 500,
+          "count": 1
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/kuri_haa",
+          "kind": "pop_in",
+          "anchor": [
+            760,
+            300
+          ],
+          "period_ms": 1400,
+          "scale": [
+            0.4,
+            1.0
+          ]
+        },
+        {
+          "layer": "fx/kuri_steam",
+          "kind": "float",
+          "anchor": [
+            831,
+            322
+          ],
+          "period_ms": 1400,
+          "rise_pt": 14
+        }
+      ]
+    },
+    "kuri_tipsy": {
+      "on": "level:dizzy",
+      "when": "hold",
+      "duration_ms": 2400,
+      "cooldown_s": 3,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "sway",
+          "pt": 3,
+          "period_ms": 2400,
+          "count": 0
+        }
+      ]
+    },
+    "kuri_flush": {
+      "on": "level:overheat",
+      "duration_ms": 2000,
+      "cooldown_s": 15,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "squash",
+          "squash": 0.04,
+          "period_ms": 600,
+          "count": 1
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/kuri_steam",
+          "kind": "float",
+          "anchor": [
+            831,
+            322
+          ],
+          "period_ms": 1000,
+          "rise_pt": 18
+        }
+      ]
+    },
+    "kuri_lick": {
+      "on": "ambient",
+      "duration_ms": 1400,
+      "head": {
+        "layer": "head/lick"
+      },
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2,
+          "period_ms": 700,
+          "count": 1
+        }
+      ]
+    },
+    "kuri_savor": {
+      "on": "prop",
+      "duration_ms": 1600,
+      "cooldown_s": 3,
+      "head": {
+        "layer": "head/savor"
+      },
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2,
+          "period_ms": 600,
+          "count": 2
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/kuri_steam",
+          "kind": "float",
+          "anchor": [
+            831,
+            322
+          ],
+          "period_ms": 1400,
+          "rise_pt": 14
+        }
+      ]
+    }
+  },
+  "_timing": {
+    "level_up": [
+      14,
+      25,
+      36
+    ],
+    "paw_down_ms": 150,
+    "wake_after_s": 25,
+    "burst_keys": 11,
+    "ambient_every_s": [
+      90,
+      240
+    ]
+  },
+  "_anim": {
+    "pop_scale": 1.03,
+    "glow_ms": 260
+  }
+}
