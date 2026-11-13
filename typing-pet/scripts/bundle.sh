@@ -83,6 +83,12 @@ for d in characters/*/; do
   cp "$d/manifest.toml" "$APP/Contents/Resources/characters/$name/"
   cp -R "$d/layers" "$APP/Contents/Resources/characters/$name/"
 done
+# 책상 소품 (모든 캐릭터가 같이 쓴다)
+if [[ -f characters/_props/props.toml ]]; then
+  mkdir -p "$APP/Contents/Resources/characters/_props"
+  cp characters/_props/props.toml "$APP/Contents/Resources/characters/_props/"
+  cp -R characters/_props/layers "$APP/Contents/Resources/characters/_props/"
+fi
 version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
 cat >"$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

@@ -2,13 +2,17 @@
 
 pub mod anim;
 pub mod config;
+pub mod desk;
 pub mod input;
+pub mod keyecho;
 pub mod pet;
 pub mod render;
 pub mod trace;
 
 #[cfg(target_os = "macos")]
 pub mod mac;
+#[cfg(target_os = "macos")]
+pub mod text;
 #[cfg(target_os = "macos")]
 pub mod tray;
 

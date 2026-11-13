@@ -11,9 +11,12 @@ pub enum TrayAction {
     ToggleVisible,
     ToggleBreathing,
     ToggleCalm,
+    ToggleKeyEcho,
     Size(f64),
     /// `Tray::characters` 의 순번.
     Character(usize),
+    /// `Tray::jobs` 의 순번 (책상 장비).
+    Job(usize),
     ToggleLoginItem,
     OpenPermissionSettings,
     Quit,
@@ -25,12 +28,15 @@ pub struct Tray {
     visible: CheckMenuItem,
     breathing: CheckMenuItem,
     calm: CheckMenuItem,
+    key_echo: CheckMenuItem,
     login: CheckMenuItem,
     sizes: Vec<(f64, CheckMenuItem)>,
     /// 지금 크기 표시 + 자유 조절 안내 (누를 수 없음).
     size_now: MenuItem,
     /// (폴더 이름, 메뉴 항목)
     characters: Vec<(String, CheckMenuItem)>,
+    /// (직군 id, 메뉴 항목)
+    jobs: Vec<(String, CheckMenuItem)>,
     warning: MenuItem,
     warning_shown: bool,
     ids: Vec<(tray_icon::menu::MenuId, TrayAction)>,
@@ -69,11 +75,12 @@ fn size_label(size: f64) -> String {
 }
 
 impl Tray {
-    /// `characters`: (폴더 이름, 메뉴 이름) 목록, `current`: 지금 캐릭터 폴더 이름.
+    /// `characters`: (폴더 이름, 메뉴 이름) 목록, `current`: 지금 캐릭터 폴더 이름, `jobs`: (직군 id, 메뉴 이름).
     pub fn new(
         cfg: &Config,
         characters: &[(String, String)],
         current: &str,
+        jobs: &[(String, String)],
         send: impl Fn(TrayAction) + Send + Sync + 'static,
     ) -> Result<Self, String> {
         let menu = Menu::new();
@@ -84,9 +91,17 @@ impl Tray {
             char_menu.append(&item).map_err(|e| e.to_string())?;
             chars.push((name.clone(), item));
         }
+        let job_menu = Submenu::new("직군 (책상 장비)", !jobs.is_empty());
+        let mut job_items = Vec::new();
+        for (id, title) in jobs {
+            let item = CheckMenuItem::new(title, true, cfg.job.as_deref() == Some(id.as_str()), None);
+            job_menu.append(&item).map_err(|e| e.to_string())?;
+            job_items.push((id.clone(), item));
+        }
         let visible = CheckMenuItem::new("보이기", true, cfg.visible, None);
         let breathing = CheckMenuItem::new("숨쉬기", true, cfg.breathing, None);
         let calm = CheckMenuItem::new("반응 줄이기", true, cfg.calm, None);
+        let key_echo = CheckMenuItem::new("입력 키 보기", true, cfg.key_echo, None);
         let size_menu = Submenu::new("크기", true);
         let mut sizes = Vec::new();
         for s in SIZES {
@@ -101,13 +116,14 @@ impl Tray {
         let login = CheckMenuItem::new("로그인 시 자동 실행", crate::mac::bundle_path().is_some(), crate::mac::login_item_enabled(), None);
         let warning = MenuItem::new("⚠ 입력 모니터링 권한 필요 (설정 열기)", true, None);
         let quit = MenuItem::new("종료", true, None);
-        menu.append_items(&[&char_menu, &visible, &breathing, &calm, &size_menu, &login, &PredefinedMenuItem::separator(), &quit])
+        menu.append_items(&[&char_menu, &job_menu, &visible, &breathing, &calm, &key_echo, &size_menu, &login, &PredefinedMenuItem::separator(), &quit])
             .map_err(|e| e.to_string())?;
 
         let mut ids = vec![
             (visible.id().clone(), TrayAction::ToggleVisible),
             (breathing.id().clone(), TrayAction::ToggleBreathing),
             (calm.id().clone(), TrayAction::ToggleCalm),
+            (key_echo.id().clone(), TrayAction::ToggleKeyEcho),
             (login.id().clone(), TrayAction::ToggleLoginItem),
             (warning.id().clone(), TrayAction::OpenPermissionSettings),
             (quit.id().clone(), TrayAction::Quit),
@@ -117,6 +133,9 @@ impl Tray {
         }
         for (i, (_, item)) in chars.iter().enumerate() {
             ids.push((item.id().clone(), TrayAction::Character(i)));
+        }
+        for (i, (_, item)) in job_items.iter().enumerate() {
+            ids.push((item.id().clone(), TrayAction::Job(i)));
         }
         let map = ids.clone();
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
@@ -131,12 +150,17 @@ impl Tray {
             .with_tooltip("typing-pet")
             .build()
             .map_err(|e| e.to_string())?;
-        Ok(Self { _icon: icon, menu, visible, breathing, calm, login, sizes, size_now, characters: chars, warning, warning_shown: false, ids })
+        Ok(Self { _icon: icon, menu, visible, breathing, calm, key_echo, login, sizes, size_now, characters: chars, jobs: job_items, warning, warning_shown: false, ids })
     }
 
     /// 순번 -> 캐릭터 폴더 이름.
     pub fn character(&self, i: usize) -> Option<&str> {
         self.characters.get(i).map(|(n, _)| n.as_str())
+    }
+
+    /// 순번 -> 직군 id.
+    pub fn job(&self, i: usize) -> Option<&str> {
+        self.jobs.get(i).map(|(n, _)| n.as_str())
     }
 
     /// 체크 표시를 지금 캐릭터에 맞춘다 (바꾸기 실패하면 이전 캐릭터로 되돌리는 데도 쓴다).
@@ -150,6 +174,10 @@ impl Tray {
         self.visible.set_checked(cfg.visible);
         self.breathing.set_checked(cfg.breathing);
         self.calm.set_checked(cfg.calm);
+        self.key_echo.set_checked(cfg.key_echo);
+        for (id, item) in &self.jobs {
+            item.set_checked(cfg.job.as_deref() == Some(id.as_str()));
+        }
         self.login.set_checked(crate::mac::login_item_enabled());
         for (s, item) in &self.sizes {
             item.set_checked((cfg.size - s).abs() < 0.5);

@@ -768,6 +768,7 @@ fn config_roundtrip() {
     c.position = Some((12.5, 34.0));
     c.size = 320.0;
     c.breathing = false;
+    c.key_echo = true;
     c.save().unwrap();
     assert_eq!(typing_pet::config::Config::load(), c);
     // 자유 크기 조절로 저장된 값도 그대로 돌아온다

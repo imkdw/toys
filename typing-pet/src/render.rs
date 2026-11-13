@@ -16,8 +16,8 @@ use crate::config::Manifest;
 const SHADER: &str = r#"
 struct U {
     xf: vec4<f32>,   // anchor.xy, offset.xy (uv)
-    p: vec4<f32>,    // scale, opacity, mix_t, mode (0 = 레이어 over, 1 = 키 빛, 2 = 마스크 지우기, 3 = 마스크 더하기, 4 = 휘게 over)
-    g: vec4<f32>,    // 빛 중심.xy, 반경 (uv), _ | 휘기: root.xy, tip.xy (uv)
+    p: vec4<f32>,    // scale, opacity, mix_t, mode (0 = 레이어 over, 1 = 키 빛, 2 = 마스크 지우기, 3 = 마스크 더하기, 4 = 휘게 over, 5 = 구름 흩어지기)
+    g: vec4<f32>,    // 빛 중심.xy, 반경 (uv), _ | 휘기: root.xy, tip.xy (uv) | 구름: 흩어짐 0~1, seed, 가로/세로 비율, _
     c: vec4<f32>,    // 빛 색 (premultiplied) | 휘기: d.xy, 반경 안/밖 (uv)
     k: vec4<f32>,    // 가로/세로 배율 (squash), _, _
 };
@@ -53,6 +53,17 @@ fn warp_w(uv: vec2<f32>) -> f32 {
     return smoothstep(0.05, 0.85, t) * (1.0 - smoothstep(u.c.z, u.c.w, distance(uv, q)));
 }
 
+fn hash2(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+fn vnoise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let s = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash2(i), hash2(i + vec2(1.0, 0.0)), s.x), mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), s.x), s.y);
+}
+
 @fragment
 fn fs(v: VO) -> @location(0) vec4<f32> {
     let mode = u32(u.p.w + 0.5);
@@ -67,6 +78,17 @@ fn fs(v: VO) -> @location(0) vec4<f32> {
         let x = clamp(distance(v.uv, u.g.xy) / u.g.z, 0.0, 1.0);
         let k = (1.0 - x * x);
         return u.c * (k * k) * u.p.y;
+    }
+    if (mode == 5u) {
+        // 구름처럼 흩어지기: 가장자리부터, 뭉게뭉게한 무늬를 따라 지워진다
+        let d = u.g.x;
+        let q = (v.uv - 0.5) * vec2(u.g.z, 1.0);
+        let np = q * 4.5 + vec2(u.g.y * 37.0, u.g.y * 11.0 - d * 1.5);
+        let n = vnoise(np) * 0.6 + vnoise(np * 2.7) * 0.4;
+        let r = length(vec2(q.x / max(u.g.z * 0.5, 0.01), q.y * 2.0));
+        let field = (1.0 - r) * 0.6 + n * 0.7;
+        let th = mix(-0.45, 1.35, d);
+        return a * u.p.y * smoothstep(th, th + 0.22, field);
     }
     if (mode == 2u) {
         // blend (Zero, OneMinusSrcAlpha): dst *= (1 - m)
@@ -146,7 +168,8 @@ impl HitMap {
     pub fn new(layers: &HashMap<String, Arc<SrcImage>>, n: usize) -> Self {
         let mut cells = vec![false; n * n];
         for (name, img) in layers {
-            if name.starts_with("mask/") {
+            // 소품은 직군에 따라 보였다 안 보였다 해서 따로 판정한다 (PropHits)
+            if name.starts_with("mask/") || name.starts_with("prop/") {
                 continue;
             }
             let (w, h) = (img.w as usize, img.h as usize);
@@ -169,6 +192,27 @@ impl HitMap {
         }
         let (x, y) = ((u * self.n as f64) as usize, (v * self.n as f64) as usize);
         self.cells[y * self.n + x]
+    }
+}
+
+/// 소품별 클릭 판정 (불투명한 곳, n x n 칸).
+#[derive(Debug, Clone, Default)]
+pub struct PropHits {
+    maps: HashMap<String, HitMap>,
+}
+
+impl PropHits {
+    pub fn new(layers: &HashMap<String, Arc<SrcImage>>, n: usize) -> Self {
+        let maps = layers
+            .iter()
+            .filter_map(|(k, v)| k.strip_prefix("prop/").map(|id| (id.to_string(), HitMap::new(&HashMap::from([(id.to_string(), v.clone())]), n))))
+            .collect();
+        Self { maps }
+    }
+
+    /// u, v 위치에 있는 소품 (보이는 것 중에서, 나중에 그린 것 우선).
+    pub fn at<'a>(&self, visible: impl DoubleEndedIterator<Item = &'a str>, u: f64, v: f64) -> Option<&'a str> {
+        visible.rev().find(|id| self.maps.get(*id).is_some_and(|m| m.hit(u, v)))
     }
 }
 
@@ -209,6 +253,26 @@ pub struct Renderer {
     tex_size: u32,
     bind_cache: HashMap<(String, String, String), wgpu::BindGroup>,
     canvas: u32,
+    /// 키 말풍선: (키 이름, 높이 px) -> (가로/세로 비율, 텍스처 바인드). 없으면(그리기 실패) None.
+    clouds: HashMap<(&'static str, u32), Option<(f32, wgpu::BindGroup)>>,
+}
+
+/// 창 안 배치: 캐릭터 정사각형은 창 아래쪽에 있고, 위쪽 `pad` px 는 키 말풍선 자리.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Layout {
+    pub w: u32,
+    pub h: u32,
+}
+
+impl Layout {
+    pub fn square(size: u32) -> Self {
+        Self { w: size, h: size }
+    }
+
+    /// 캐릭터 정사각형 위 띠 높이 (px).
+    pub fn pad(&self) -> u32 {
+        self.h.saturating_sub(self.w)
+    }
 }
 
 impl Renderer {
@@ -347,11 +411,16 @@ impl Renderer {
             tex_size: 0,
             bind_cache: HashMap::new(),
             canvas,
+            clouds: HashMap::new(),
         }
     }
 
     fn upload(device: &wgpu::Device, queue: &wgpu::Queue, size: u32, data: &[u8], label: &str) -> Tex {
-        let extent = wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 };
+        Self::upload_wh(device, queue, size, size, data, label)
+    }
+
+    fn upload_wh(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, data: &[u8], label: &str) -> Tex {
+        let extent = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: extent,
@@ -365,7 +434,7 @@ impl Renderer {
         queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             data,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * size), rows_per_image: Some(size) },
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) },
             extent,
         );
         let view = tex.create_view(&Default::default());
@@ -433,11 +502,51 @@ impl Renderer {
         Some(bg)
     }
 
-    /// Frame 을 target 에 그린다 (투명으로 지운 뒤).
+    /// 키 말풍선 텍스처 (처음 쓸 때 그려 둔다).
+    fn cloud(&mut self, label: &'static str, h: u32) -> Option<(f32, wgpu::BindGroup)> {
+        if let Some(v) = self.clouds.get(&(label, h)) {
+            return v.clone();
+        }
+        // 크기를 자주 바꾸면 쌓이므로 적당히 비운다
+        if self.clouds.len() > 256 {
+            self.clouds.clear();
+        }
+        #[cfg(target_os = "macos")]
+        let img = crate::text::cloud(label, h);
+        #[cfg(not(target_os = "macos"))]
+        let img: Option<SrcImage> = None;
+        let v = img.map(|img| {
+            let t = Self::upload_wh(&self.device, &self.queue, img.w, img.h, &img.data, label);
+            let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("cloud"),
+                layout: &self.bgl_tex,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&t.view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&t.view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.white.view) },
+                ],
+            });
+            (img.w as f32 / img.h as f32, bg)
+        });
+        if v.is_none() {
+            log::warn!("키 말풍선 그리기 실패: {label}");
+        }
+        self.clouds.insert((label, h), v.clone());
+        v
+    }
+
+    /// Frame 을 target 에 그린다 (투명으로 지운 뒤). target 은 정사각형.
     pub fn draw(&mut self, frame: &Frame, target: &wgpu::TextureView) {
+        self.draw_scene(frame, &[], None, target);
+    }
+
+    /// 캐릭터(`frame`)와 키 말풍선을 그린다. `layout` 이 있으면 캐릭터는 아래쪽 정사각형에, 말풍선은 창 전체 기준.
+    pub fn draw_scene(&mut self, frame: &Frame, keys: &[crate::keyecho::Sprite], layout: Option<Layout>, target: &wgpu::TextureView) {
         let c = self.canvas as f32;
         let mut unis: Vec<[f32; 20]> = Vec::new();
-        let mut binds: Vec<(u8, wgpu::BindGroup)> = Vec::new();
+        // (파이프라인, 바인드, 창 전체에 그리기)
+        let mut binds: Vec<(u8, wgpu::BindGroup, bool)> = Vec::new();
         for cmd in &frame.cmds {
             let (a, b, t, mode, g) = match &cmd.kind {
                 DrawKind::Layer { name } if cmd.warp.is_some() => {
@@ -470,12 +579,32 @@ impl Renderer {
             if !m.is_empty() && mode == 0.0 {
                 // 마스크 안을 교체: 지우고(dst *= 1-m) 더하기(dst += layer*m)
                 unis.push(u(2.0));
-                binds.push((1, bg.clone()));
+                binds.push((1, bg.clone(), false));
                 unis.push(u(3.0));
-                binds.push((2, bg));
+                binds.push((2, bg, false));
             } else {
                 unis.push(u(mode));
-                binds.push((0, bg));
+                binds.push((0, bg, false));
+            }
+        }
+        if let Some(l) = layout.filter(|_| !keys.is_empty()) {
+            let (w, h, pad) = (l.w as f32, l.h as f32, l.pad() as f32);
+            for k in keys {
+                // 텍스처는 기본 크기로 한 번만 그리고, 튀어나오기/부풀기는 늘려 그린다
+                let tex_h = (crate::keyecho::Sprite::BASE_HEIGHT * w).round().max(8.0) as u32;
+                let Some((aspect, bg)) = self.cloud(k.label, tex_h) else { continue };
+                let sh = k.height * w;
+                let sw = sh * aspect;
+                let (cx, cy) = (k.center[0] * w, pad + k.center[1] * w);
+                let (kx, ky) = (sw / w, sh / h);
+                unis.push([
+                    0.0, 0.0, cx / w - kx / 2.0, cy / h - ky / 2.0,
+                    1.0, k.opacity, 0.0, 5.0,
+                    k.dissolve, k.seed, aspect, 0.0,
+                    0.0, 0.0, 0.0, 0.0,
+                    kx, ky, 0.0, 0.0,
+                ]);
+                binds.push((0, bg, true));
             }
         }
         unis.truncate(MAX_DRAWS as usize);
@@ -503,7 +632,18 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            for (i, (pipe, bg)) in binds.iter().enumerate().take(MAX_DRAWS as usize) {
+            let mut full = None;
+            for (i, (pipe, bg, whole)) in binds.iter().enumerate().take(MAX_DRAWS as usize) {
+                if let Some(l) = layout {
+                    if full != Some(*whole) {
+                        full = Some(*whole);
+                        if *whole {
+                            pass.set_viewport(0.0, 0.0, l.w as f32, l.h as f32, 0.0, 1.0);
+                        } else {
+                            pass.set_viewport(0.0, l.pad() as f32, l.w as f32, l.w as f32, 0.0, 1.0);
+                        }
+                    }
+                }
                 pass.set_pipeline(match pipe {
                     1 => &self.pipe_erase,
                     2 => &self.pipe_add,
@@ -530,17 +670,25 @@ pub fn headless_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
 pub struct Offscreen {
     pub renderer: Renderer,
     size: u32,
+    /// 키 말풍선 띠를 포함한 높이 (없으면 size).
+    height: u32,
     target: wgpu::Texture,
 }
 
 impl Offscreen {
     pub fn new(m: &Manifest, size: u32) -> Result<Self, String> {
+        Self::with_pad(m, size, 0)
+    }
+
+    /// 캐릭터 정사각형 위에 `pad` px 띠를 더한 판 (키 말풍선 확인용).
+    pub fn with_pad(m: &Manifest, size: u32, pad: u32) -> Result<Self, String> {
+        let height = size + pad;
         let (device, queue) = headless_device()?;
         let mut renderer = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8Unorm, load_layers(m), m.canvas);
         renderer.prepare(size);
         let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen"),
-            size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d { width: size, height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -548,18 +696,28 @@ impl Offscreen {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        Ok(Self { renderer, size, target })
+        Ok(Self { renderer, size, height, target })
+    }
+
+    /// 캐릭터 정사각형 기준 위치/크기 (키 말풍선 띠 포함).
+    pub fn layout(&self) -> Layout {
+        Layout { w: self.size, h: self.height }
     }
 
     pub fn render(&mut self, frame: &Frame) -> image::RgbaImage {
+        self.render_scene(frame, &[])
+    }
+
+    pub fn render_scene(&mut self, frame: &Frame, keys: &[crate::keyecho::Sprite]) -> image::RgbaImage {
         let view = self.target.create_view(&Default::default());
-        self.renderer.draw(frame, &view);
-        let size = self.size;
+        let layout = self.layout();
+        self.renderer.draw_scene(frame, keys, (layout.pad() > 0).then_some(layout), &view);
+        let (size, height) = (self.size, self.height);
         let row = (4 * size).div_ceil(256) * 256;
         let dev = &self.renderer.device;
         let buf = dev.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
-            size: (row * size) as u64,
+            size: (row * height) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -568,23 +726,41 @@ impl Offscreen {
             wgpu::TexelCopyTextureInfo { texture: &self.target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buf,
-                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(size) },
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) },
             },
-            wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+            wgpu::Extent3d { width: size, height, depth_or_array_layers: 1 },
         );
         self.renderer.queue.submit([enc.finish()]);
         let slice = buf.slice(..);
         slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
         dev.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
         let mapped = slice.get_mapped_range().expect("mapped");
-        let mut out = Vec::with_capacity((4 * size * size) as usize);
-        for y in 0..size {
+        let mut out = Vec::with_capacity((4 * size * height) as usize);
+        for y in 0..height {
             let s = (y * row) as usize;
             out.extend_from_slice(&mapped[s..s + (4 * size) as usize]);
         }
         drop(mapped);
         buf.unmap();
         unpremultiply(&mut out);
-        image::RgbaImage::from_raw(size, size, out).expect("이미지")
+        image::RgbaImage::from_raw(size, height, out).expect("이미지")
     }
+}
+
+/// 키 말풍선이 나올 자리: 머리(head/normal, 없으면 base) 불투명 영역의 가운데 x 와 꼭대기 y (0~1).
+pub fn head_spot(layers: &HashMap<String, Arc<SrcImage>>) -> Option<(f32, f32)> {
+    let img = layers.get("head/normal").or_else(|| layers.get("base"))?;
+    let (w, h) = (img.w as usize, img.h as usize);
+    let (mut x0, mut x1, mut top) = (w, 0, None);
+    for y in 0..h {
+        for x in 0..w {
+            if img.data[(y * w + x) * 4 + 3] > 128 {
+                top.get_or_insert(y);
+                x0 = x0.min(x);
+                x1 = x1.max(x);
+            }
+        }
+    }
+    let top = top?;
+    Some(((x0 + x1) as f32 / 2.0 / w as f32, top as f32 / h as f32))
 }

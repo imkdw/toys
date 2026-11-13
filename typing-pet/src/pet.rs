@@ -179,7 +179,7 @@ impl NamedKey {
 /// 엔진이 알리는 "무슨 일이 일어났는지". 어떻게 반응할지는 캐릭터 manifest 의 `[[behavior]]` 가 정한다.
 ///
 /// manifest 에는 문자열로 쓴다: `idle`, `milestone`, `gesture`, `level:<normal|excited|dizzy|overheat|sleepy>`,
-/// `egg`(선글라스), `wake`, `burst`, `key:<enter|backspace|space|tab|escape|delete>`, `ambient`.
+/// `egg`(선글라스), `wake`, `burst`, `key:<enter|backspace|space|tab|escape|delete>`, `ambient`, `prop`(책상 소품을 누름).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum Cue {
@@ -200,6 +200,8 @@ pub enum Cue {
     Key(NamedKey),
     /// 평소 상태에서 `ambient_every_s` 범위의 무작위 간격.
     Ambient,
+    /// 책상 소품을 눌렀을 때 (직군/캐릭터 소품 상호작용).
+    Prop,
 }
 
 impl Cue {
@@ -231,7 +233,7 @@ impl Cue {
     pub fn all() -> Vec<Cue> {
         let mut v = vec![Cue::Idle, Cue::Milestone, Cue::Gesture];
         v.extend([Head::Normal, Head::Excited, Head::Dizzy, Head::Overheat, Head::Sleepy].map(Cue::Level));
-        v.extend([Cue::Egg, Cue::Wake, Cue::Burst, Cue::Ambient]);
+        v.extend([Cue::Egg, Cue::Wake, Cue::Burst, Cue::Ambient, Cue::Prop]);
         v.extend(NamedKey::ALL.map(Cue::Key));
         v
     }
@@ -249,6 +251,7 @@ impl fmt::Display for Cue {
             Cue::Burst => f.write_str("burst"),
             Cue::Key(k) => write!(f, "key:{}", k.name()),
             Cue::Ambient => f.write_str("ambient"),
+            Cue::Prop => f.write_str("prop"),
         }
     }
 }
@@ -256,7 +259,7 @@ impl fmt::Display for Cue {
 impl std::str::FromStr for Cue {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, String> {
-        let bad = || format!("알 수 없는 cue: {s:?} (idle, milestone, gesture, level:<단계>, egg, wake, burst, key:<이름>, ambient)");
+        let bad = || format!("알 수 없는 cue: {s:?} (idle, milestone, gesture, level:<단계>, egg, wake, burst, key:<이름>, ambient, prop)");
         Ok(match s {
             "idle" => Cue::Idle,
             "milestone" => Cue::Milestone,
@@ -265,6 +268,7 @@ impl std::str::FromStr for Cue {
             "wake" => Cue::Wake,
             "burst" => Cue::Burst,
             "ambient" => Cue::Ambient,
+            "prop" => Cue::Prop,
             _ => {
                 if let Some(l) = s.strip_prefix("level:") {
                     let h = [Head::Normal, Head::Excited, Head::Dizzy, Head::Overheat, Head::Sleepy]

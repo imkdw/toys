@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Anim, Behavior, Breathe, FxKind, LayerMode, Manifest, Motion, MotionKind, MotionTarget, SceneFx, Step, Swing, When};
+use crate::config::{Anim, Behavior, Breathe, Desk, FxKind, LayerMode, Manifest, Motion, MotionKind, MotionTarget, SceneFx, Step, Swing, When};
+use crate::desk::{Catalog, Prop};
 use crate::pet::{Cue, Head, PawL, PawR, PetEvent, PetState, Pose};
 
 // ---------- 이징 ----------
@@ -136,22 +137,32 @@ impl Frame {
 #[derive(Debug, Clone)]
 pub struct Layers {
     have: BTreeSet<String>,
+    /// 그려도 되는 머리 (애니 근거가 있는 표정). None 이면 제한 없음 (테스트용 [`Layers::new`]).
+    heads: Option<BTreeSet<String>>,
 }
 
 impl Layers {
     pub fn new(have: BTreeSet<String>) -> Self {
-        Self { have }
+        Self { have, heads: None }
     }
+    /// manifest 의 `[expressions]` 에 없는 머리는 파일이 있어도 없는 것으로 본다 (head/normal 로 대체).
     pub fn from_manifest(m: &Manifest) -> Self {
-        Self::new(m.layer_set())
+        let heads = m.layers.iter().filter(|l| l.starts_with("head/") && m.allows_head(l)).cloned().collect();
+        Self { have: m.layer_set(), heads: Some(heads) }
     }
     pub fn has(&self, name: &str) -> bool {
         self.have.contains(name)
     }
+    /// 머리로 그릴 수 있는 레이어인가 (파일이 있고 표정이 허용됨).
+    pub fn has_head(&self, name: &str) -> bool {
+        self.have.contains(name) && self.heads.as_ref().is_none_or(|h| h.contains(name))
+    }
+    /// 머리 자리에 그릴 레이어. 허용되지 않은 표정은 가장 가까운 허용된 머리로 (보통 head/normal).
     pub fn resolve(&self, name: &str) -> Option<String> {
         let mut cur = name;
         loop {
-            if self.have.contains(cur) {
+            let ok = if cur.starts_with("head/") { self.has_head(cur) } else { self.have.contains(cur) };
+            if ok {
                 return Some(cur.to_string());
             }
             cur = match cur {
@@ -508,6 +519,15 @@ pub struct Animator {
     pose_fade: Option<Instant>,
     /// 새로 시작한 behavior 이름 (트레이스용, drain_started 로 비운다).
     started: Vec<String>,
+
+    /// 책상 소품 정의와 이 캐릭터의 자리 설정.
+    catalog: Catalog,
+    desk: Desk,
+    job: Option<String>,
+    /// 지금 책상에 놓인 소품 (직군 + 캐릭터).
+    items: Vec<Prop>,
+    /// 소품 id -> 누른 시각.
+    taps: HashMap<String, Instant>,
 }
 
 impl Animator {
@@ -543,7 +563,85 @@ impl Animator {
             prev_full: None,
             pose_fade: None,
             started: Vec::new(),
+            catalog: m.catalog.clone(),
+            desk: m.desk.clone().unwrap_or_default(),
+            job: m.job.clone(),
+            items: Vec::new(),
+            taps: HashMap::new(),
         }
+        .with_items()
+    }
+
+    fn with_items(mut self) -> Self {
+        self.refresh_items();
+        self
+    }
+
+    fn refresh_items(&mut self) {
+        let items = self.catalog.items(self.job.as_deref(), self.desk.item.as_deref());
+        self.items = items.into_iter().filter(|p| self.layers.has(&p.layer())).collect();
+        self.taps.retain(|id, _| self.items.iter().any(|p| &p.id == id));
+    }
+
+    /// 직군을 바꾼다 (없는 직군이면 캐릭터 소품만).
+    pub fn set_job(&mut self, job: Option<&str>) {
+        self.job = job.map(str::to_string);
+        self.refresh_items();
+    }
+
+    /// 지금 책상에 놓인 소품.
+    pub fn items(&self) -> &[Prop] {
+        &self.items
+    }
+
+    /// 소품을 눌렀다: 소품이 반응하고 캐릭터에게 `prop` cue 를 알린다. 놓여 있지 않은 소품이면 false.
+    pub fn tap(&mut self, id: &str, now: Instant) -> bool {
+        if !self.items.iter().any(|p| p.id == id) {
+            return false;
+        }
+        self.tick(now);
+        self.taps.insert(id.to_string(), now);
+        self.fire(Cue::Prop, None, now);
+        true
+    }
+
+    fn tap_active(&self, now: Instant) -> bool {
+        self.items.iter().any(|p| self.taps.get(&p.id).is_some_and(|&t| now.saturating_duration_since(t).as_millis() < p.tap_len() as u128))
+    }
+
+    /// 소품 그리기. `full` 이 보이는 장면 프레임이면 그 프레임이 덮는 자리는 건너뛴다.
+    fn prop_cmds(&self, full: Option<&DrawKind>, alpha: f32, now: Instant) -> Vec<DrawCmd> {
+        let hidden: Vec<&str> = match full {
+            Some(DrawKind::Layer { name }) => vec![name.as_str()],
+            Some(DrawKind::Mix { a, b, .. }) => vec![a.as_str(), b.as_str()],
+            _ => vec![],
+        }
+        .into_iter()
+        .filter_map(|f| self.desk.hide.get(f))
+        .flatten()
+        .map(String::as_str)
+        .collect();
+        let pt = self.px_per_pt;
+        let mut v = Vec::new();
+        for p in self.items.iter().filter(|p| !hidden.contains(&p.slot.as_str())) {
+            let mut c = DrawCmd { opacity: alpha, anchor: p.foot, ..DrawCmd::layer(&p.layer()) };
+            if let Some(&t) = self.taps.get(&p.id) {
+                let lt = now.saturating_duration_since(t).as_millis() as f32;
+                let len = p.tap_len() as f32;
+                if lt < len {
+                    let default_tap;
+                    let tap: &[Motion] = if p.tap.is_empty() {
+                        default_tap = [Motion { target: "body".into(), kind: MotionKind::Hop, pt: Some(3.5), period_ms: Some(380), count: 1, delay_ms: 0, squash: 0.1 }];
+                        &default_tap
+                    } else {
+                        &p.tap
+                    };
+                    motion_xf(tap, &[], MotionTarget::Body, lt, Some(len), p.foot, pt).apply(&mut c);
+                }
+            }
+            v.push(c);
+        }
+        v
     }
 
     pub fn set_size_pt(&mut self, canvas: u32, size_pt: f32) {
@@ -574,7 +672,7 @@ impl Animator {
 
     /// 지금 보이는 머리 레이어 이름 (dizzy 교대 반영, 대체 전 이름).
     fn head_layer(&self, head: Head, now: Instant) -> &'static str {
-        if head == Head::Dizzy && self.layers.has("head/dizzy_wiggle") {
+        if head == Head::Dizzy && self.layers.has_head("head/dizzy_wiggle") {
             let n = now.saturating_duration_since(self.dizzy_since).as_millis() / self.a.wiggle_ms.max(1) as u128;
             if n % 2 == 1 {
                 return "head/dizzy_wiggle";
@@ -592,7 +690,7 @@ impl Animator {
             if state.head == Head::Dizzy {
                 self.dizzy_since = now;
             }
-            if state.head == Head::Sunglasses && self.layers.has("fx/sunglasses") {
+            if state.head == Head::Sunglasses && self.layers.has("fx/sunglasses") && self.layers.has_head("head/sunglasses") {
                 // 선글라스가 위에서 내려온 뒤 머리를 크로스페이드
                 self.sun_drop = Some(now);
                 self.sun_prev_head = from;
@@ -987,6 +1085,7 @@ impl Animator {
                 head_xf.apply(&mut f);
                 cmds.push(f);
             }
+            cmds.extend(self.prop_cmds(None, 1.0, now));
             if let Some((_, b, lt, len)) = ov {
                 cmds.extend(self.behavior_fx(&b.motion, &b.fx, lt, len, |_| 1.0, 0.0, 1.0));
             }
@@ -994,6 +1093,8 @@ impl Animator {
         if let Some(r) = full_run {
             if full_alpha > 0.0 {
                 cmds.extend(self.full_cmds(r, full_alpha, now));
+                let shown = r.full.as_ref().map(|f| f.kind(r.local(now).unwrap_or(0)));
+                cmds.extend(self.prop_cmds(shown.as_ref(), full_alpha, now));
             }
         }
         Frame { cmds }
@@ -1048,6 +1149,7 @@ impl Animator {
             || live(self.sun_drop, a.sunglasses_drop_ms + a.head_fade_ms)
             || !self.glows.iter().all(|g| progress(now, g.start, a.glow_ms) >= 1.0)
             || self.overlay_moving(now)
+            || self.tap_active(now)
     }
 
     /// 보이는 overlay 가 움직이는 중인가 (움직임/소품, 또는 머리 바꾸기가 섞이는 중).
@@ -1076,7 +1178,7 @@ impl Animator {
         let mut at = |x: Instant| t = Some(t.map_or(x, |y: Instant| y.min(x)));
         let tick = now + Duration::from_secs_f32(1.0 / self.a.breathe_fps.max(1.0));
         let full = self.top(LayerMode::Full, now);
-        if self.state.head == Head::Dizzy && full.is_none() && self.layers.has("head/dizzy_wiggle") {
+        if self.state.head == Head::Dizzy && full.is_none() && self.layers.has_head("head/dizzy_wiggle") {
             let w = self.a.wiggle_ms.max(1) as u128;
             let el = now.saturating_duration_since(self.dizzy_since).as_millis();
             at(self.dizzy_since + Duration::from_millis(((el / w + 1) * w) as u64));

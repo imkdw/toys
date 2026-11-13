@@ -22,13 +22,20 @@ pub struct Config {
     pub breathing: bool,
     /// 반응 줄이기: 장면(idle, milestone, gesture) 밖의 캐릭터 행동을 끈다.
     pub calm: bool,
+    /// 직군 (characters/_props/props.toml 의 [[job]] id). 책상 위 장비가 바뀐다. None 이면 캐릭터 소품만.
+    pub job: Option<String>,
+    /// 입력 키 보기: 누른 키 이름이 머리 위에 구름 말풍선으로 떴다가 흩어진다. 켜면 창이 위로 조금 늘어난다.
+    pub key_echo: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { character: None, position: None, size: 240.0, visible: true, breathing: true, calm: false }
+        Self { character: None, position: None, size: 240.0, visible: true, breathing: true, calm: false, job: Some(DEFAULT_JOB.into()), key_echo: false }
     }
 }
+
+/// 처음 실행할 때의 직군.
+pub const DEFAULT_JOB: &str = "basic";
 
 pub const SIZES: [f64; 5] = [160.0, 200.0, 240.0, 320.0, 400.0];
 
@@ -115,9 +122,34 @@ pub struct Manifest {
     pub anim: Anim,
     #[serde(default)]
     pub keys: Keys,
+    /// 애니에 실제로 나온 표정만 그린다: `head/<이름>` -> 근거 (회차/프레임 id).
+    /// 여기 없는 머리 레이어는 파일이 있어도 쓰지 않고 head/normal 로 그린다 (head/normal 은 항상 허용).
+    #[serde(default)]
+    pub expressions: BTreeMap<String, String>,
+    /// 책상 소품 자리 (`[desk]`). 직군/캐릭터 소품을 이 자리에 놓는다.
+    #[serde(default)]
+    pub desk: Option<Desk>,
 
     #[serde(skip)]
     pub dir: PathBuf,
+    /// 모든 캐릭터가 같이 쓰는 책상 소품 (`characters/_props`). 소품 레이어는 `prop/<id>` 로 layers 에 더한다.
+    #[serde(skip)]
+    pub catalog: crate::desk::Catalog,
+    /// 처음 놓을 직군 소품 (앱은 설정의 직군, 렌더 CLI 는 `--job`). None 이면 캐릭터 소품만.
+    #[serde(skip)]
+    pub job: Option<String>,
+}
+
+/// 책상 소품 (`[desk]`). 소품 그림은 characters/_props 에서 모든 캐릭터가 같이 쓴다 (src/desk.rs).
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Desk {
+    /// 이 캐릭터의 소품 (props.toml 의 id). 캐릭터 자리에 놓인다.
+    #[serde(default)]
+    pub item: Option<String>,
+    /// 장면 프레임이 덮는 자리: 그 프레임이 보이는 동안 그 자리 소품을 그리지 않는다 (slice.py 가 계산).
+    #[serde(default)]
+    pub hide: BTreeMap<String, Vec<String>>,
 }
 
 /// 마우스를 움직이는 동안 fx/mouse_arm 을 휘게 그리는 축 (캔버스 px).
@@ -710,6 +742,14 @@ impl Manifest {
             .map_err(|e| format!("{}: {e}", dir.join("manifest.toml").display()))?;
         let mut manifest: Manifest = toml::from_str(&text)?;
         manifest.dir = dir.to_path_buf();
+        if let Some(root) = dir.parent() {
+            manifest.catalog = crate::desk::Catalog::load_in(root)?;
+            for p in &manifest.catalog.props {
+                if manifest.catalog.layer_path(&p.id).is_file() {
+                    manifest.layers.push(p.layer());
+                }
+            }
+        }
         manifest.validate()?;
         manifest.apply_scenes();
         Ok(manifest)
@@ -751,6 +791,11 @@ impl Manifest {
         }
         for b in &self.behaviors {
             self.validate_behavior(b).map_err(|e| format!("behavior {}: {e}", b.name))?;
+        }
+        if let Some(d) = &self.desk {
+            if let Some(f) = d.hide.keys().find(|f| !self.layers.iter().any(|l| l == *f)) {
+                return Err(format!("[desk.hide] 의 프레임 {f} 이 layers 에 없음"));
+            }
         }
         let [lo, hi] = t.ambient_every_s;
         if hi > 0 && lo > hi {
@@ -868,6 +913,29 @@ impl Manifest {
         if hi > 0 && self.timing.ambient_every_s[0] < MIN_AMBIENT_S {
             errs.push(format!("ambient_every_s 최소 간격은 {MIN_AMBIENT_S}초 이상 (너무 자주 나오면 시끄러움)"));
         }
+        for (h, why) in &self.expressions {
+            if !h.starts_with("head/") || why.trim().is_empty() {
+                errs.push(format!("[expressions] {h:?}: head/<이름> = \"<애니 회차/프레임 근거>\" 꼴이어야 함"));
+            }
+        }
+        for b in &all {
+            for h in b.head.iter().flat_map(|h| h.frames()) {
+                if !self.allows_head(h) {
+                    errs.push(format!("behavior {} 의 머리 {h} 는 [expressions] 에 근거가 없어 그려지지 않음", b.name));
+                }
+            }
+        }
+        if !self.catalog.props.is_empty() {
+            match self.desk.as_ref().and_then(|d| d.item.as_deref()) {
+                None => errs.push("[desk] item (캐릭터 책상 소품) 이 없음".into()),
+                Some(i) if self.catalog.prop(i).is_none() => errs.push(format!("[desk] item {i} 이 characters/_props/props.toml 에 없음")),
+                Some(i) if !self.layers.iter().any(|l| *l == format!("prop/{i}")) => errs.push(format!("소품 그림 prop/{i} 이 없음")),
+                _ => {}
+            }
+            if !all.iter().any(|b| b.on == Cue::Prop) {
+                errs.push("prop cue (책상 소품을 누름) 에 behavior 가 없음".into());
+            }
+        }
         let mine: BTreeSet<&str> = all.iter().map(|b| b.name.as_str()).collect();
         let my_hashes = self.behavior_layer_hashes();
         for o in others {
@@ -917,10 +985,18 @@ impl Manifest {
     }
 
     pub fn layer_path(&self, name: &str) -> PathBuf {
+        if let Some(id) = name.strip_prefix("prop/") {
+            return self.catalog.layer_path(id);
+        }
         self.dir.join("layers").join(format!("{name}.png"))
     }
 
     pub fn layer_set(&self) -> BTreeSet<String> {
         self.layers.iter().cloned().collect()
+    }
+
+    /// 이 머리 레이어를 그려도 되는가 (애니 근거가 있는 표정만). head/ 가 아닌 레이어는 항상 true.
+    pub fn allows_head(&self, layer: &str) -> bool {
+        !layer.starts_with("head/") || layer == "head/normal" || self.expressions.contains_key(layer)
     }
 }

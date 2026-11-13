@@ -242,6 +242,8 @@ fn basic_only(name: &str) -> Manifest {
     let mut m = test_manifest();
     m.name = name.into();
     m.behaviors.clear();
+    // 책상 소품 규칙은 tests/desk.rs 에서 (로컬의 characters/_props 유무와 상관없게)
+    m.catalog = Default::default();
     let t: toml::Table = toml::from_str(&format!(
         r#"
 [[scene]]

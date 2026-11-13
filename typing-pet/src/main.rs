@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 use typing_pet::anim::Animator;
 use typing_pet::config::{self, Config, Manifest};
 use typing_pet::input::{self, Cursor, Input};
+use typing_pet::keyecho::{self, KeyEcho};
 use typing_pet::pet::{Pet, PetState};
-use typing_pet::render::{self, HitMap, Renderer};
+use typing_pet::render::{self, HitMap, Layout, PropHits, Renderer};
 use typing_pet::tray::{Tray, TrayAction};
 use typing_pet::{mac, trace};
 use winit::application::ApplicationHandler;
@@ -31,6 +32,9 @@ struct WindowGpu {
     config: wgpu::SurfaceConfiguration,
     renderer: Renderer,
     hit: HitMap,
+    props: PropHits,
+    /// 키 말풍선이 나올 자리 (머리 가운데 x, 꼭대기 y).
+    spot: Option<(f32, f32)>,
 }
 
 impl WindowGpu {
@@ -65,9 +69,12 @@ impl WindowGpu {
         surface.configure(&device, &config);
         let layers = render::load_layers(m);
         let hit = HitMap::new(&layers, 128);
+        let props = PropHits::new(&layers, 128);
+        let spot = render::head_spot(&layers);
         let mut renderer = Renderer::new(device, queue, format, layers, m.canvas);
-        renderer.prepare(size.width.max(size.height));
-        Ok(Self { surface, config, renderer, hit })
+        // 캐릭터는 창 아래쪽 정사각형 (위쪽은 키 말풍선 띠)
+        renderer.prepare(size.width);
+        Ok(Self { surface, config, renderer, hit, props, spot })
     }
 
     fn resize(&mut self, w: u32, h: u32) {
@@ -86,6 +93,8 @@ struct App {
     manifest: Manifest,
     pet: Pet,
     anim: Animator,
+    /// 입력 키 보기 말풍선.
+    keys: KeyEcho,
     window: Option<Arc<Window>>,
     gpu: Option<WindowGpu>,
     tray: Option<Tray>,
@@ -94,6 +103,8 @@ struct App {
     hover: bool,
     /// 캐릭터를 끌어 옮기는 중 (왼쪽 버튼을 뗄 때까지).
     dragging: bool,
+    /// 마지막 커서 위치 (창 안 0~1). 책상 소품을 눌렀는지 볼 때 쓴다.
+    cursor_uv: (f64, f64),
     /// 끌기 전에 맨 앞에 있던 앱. 끌고 나면 포커스를 돌려준다.
     prev_app: Option<objc2::rc::Retained<objc2_app_kit::NSRunningApplication>>,
     tap_ok: bool,
@@ -108,8 +119,9 @@ struct App {
 }
 
 impl App {
-    fn new(cfg: Config, manifest: Manifest, proxy: EventLoopProxy<AppEvent>) -> Self {
+    fn new(cfg: Config, mut manifest: Manifest, proxy: EventLoopProxy<AppEvent>) -> Self {
         let now = Instant::now();
+        manifest.job = cfg.job.clone();
         let mut pet = Pet::new(manifest.timing.clone(), manifest.keys.clone(), now);
         let mut anim = Animator::new(&manifest, cfg.size as f32, now);
         anim.breathing = cfg.breathing;
@@ -120,12 +132,14 @@ impl App {
             manifest,
             pet,
             anim,
+            keys: KeyEcho::default(),
             window: None,
             gpu: None,
             tray: None,
             proxy,
             hover: false,
             dragging: false,
+            cursor_uv: (-1.0, -1.0),
             prev_app: None,
             tap_ok: false,
             next_tap_retry: None,
@@ -179,16 +193,23 @@ impl App {
         }
     }
 
+    /// 캐릭터 위에 더하는 키 말풍선 띠 높이 (pt). 입력 키 보기가 꺼져 있으면 0.
+    fn pad(&self) -> f64 {
+        if self.cfg.key_echo { (self.cfg.size * keyecho::BAND).round() } else { 0.0 }
+    }
+
     fn create_window(&mut self, el: &ActiveEventLoop) {
         let size = self.cfg.size;
+        // 저장 위치/초기 위치는 캐릭터 정사각형의 좌상단. 창은 그 위로 띠만큼 더 크다
         let pos = self.initial_position(el, size);
+        let pad = self.pad();
         let attrs = Window::default_attributes()
             .with_title("typing-pet")
             .with_transparent(true)
             .with_decorations(false)
             .with_resizable(false)
-            .with_inner_size(LogicalSize::new(size, size))
-            .with_position(pos)
+            .with_inner_size(LogicalSize::new(size, size + pad))
+            .with_position(LogicalPosition::new(pos.x, pos.y - pad))
             .with_window_level(WindowLevel::AlwaysOnTop)
             .with_has_shadow(false)
             .with_visible(self.cfg.visible);
@@ -197,7 +218,12 @@ impl App {
         let _ = window.set_cursor_hittest(false);
         log::info!("창 번호 {:?}", mac::window_number(&window));
         match WindowGpu::new(window.clone(), &self.manifest) {
-            Ok(g) => self.gpu = Some(g),
+            Ok(g) => {
+                if let Some((x, top)) = g.spot {
+                    self.keys.set_spot(x, top);
+                }
+                self.gpu = Some(g);
+            }
             Err(e) => {
                 log::error!("렌더러 초기화 실패: {e}");
                 el.exit();
@@ -274,14 +300,17 @@ impl App {
                 if self.dragging {
                     return;
                 }
-                let over = match (&self.window, &self.gpu) {
-                    (Some(w), Some(g)) if self.cfg.visible => w
-                        .outer_position()
-                        .map(|p| {
-                            let p = p.to_logical::<f64>(w.scale_factor());
-                            g.hit.hit((x - p.x) / self.cfg.size, (y - p.y) / self.cfg.size)
-                        })
-                        .unwrap_or(false),
+                let pad = self.pad();
+                let uv = match &self.window {
+                    Some(w) if self.cfg.visible => w.outer_position().ok().map(|p| {
+                        let p = p.to_logical::<f64>(w.scale_factor());
+                        ((x - p.x) / self.cfg.size, (y - p.y - pad) / self.cfg.size)
+                    }),
+                    _ => None,
+                };
+                self.cursor_uv = uv.unwrap_or((-1.0, -1.0));
+                let over = match (uv, &self.gpu) {
+                    (Some(uv), Some(g)) => g.hit.hit(uv.0, uv.1) || self.prop_at(uv).is_some(),
                     _ => false,
                 };
                 if over != self.hover {
@@ -297,6 +326,12 @@ impl App {
         }
     }
 
+    /// 커서 아래 책상 소품 (지금 놓인 것 중에서).
+    fn prop_at(&self, uv: (f64, f64)) -> Option<String> {
+        let g = self.gpu.as_ref()?;
+        g.props.at(self.anim.items().iter().map(|p| p.id.as_str()), uv.0, uv.1).map(str::to_string)
+    }
+
     fn request_redraw(&self) {
         if let Some(w) = &self.window {
             w.request_redraw();
@@ -308,6 +343,8 @@ impl App {
         self.sync(now);
         let Some(gpu) = &mut self.gpu else { return };
         let frame = self.anim.frame(now);
+        let keys = if self.cfg.key_echo { self.keys.sprites(now) } else { Vec::new() };
+        let layout = Layout { w: gpu.config.width, h: gpu.config.height };
         let t_acq = Instant::now();
         let tex = match gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -320,7 +357,7 @@ impl App {
         };
         let acquired = Instant::now();
         let view = tex.texture.create_view(&Default::default());
-        gpu.renderer.draw(&frame, &view);
+        gpu.renderer.draw_scene(&frame, &keys, Some(layout), &view);
         let drawn = Instant::now();
         if let Some(w) = &self.window {
             w.pre_present_notify();
@@ -369,7 +406,7 @@ impl App {
             self.request_redraw();
             return;
         }
-        if self.anim.animating(now) {
+        if self.anim.animating(now) || self.keys.animating(now) {
             // 연출 중에는 vsync 에 맞춰 계속 그린다
             self.request_redraw();
         } else {
@@ -383,6 +420,7 @@ impl App {
                 self.cfg.visible = !self.cfg.visible;
                 if let Some(w) = &self.window {
                     w.set_visible(self.cfg.visible);
+                    self.keys.clear();
                     if !self.cfg.visible && self.hover {
                         self.hover = false;
                         let _ = w.set_cursor_hittest(false);
@@ -395,6 +433,7 @@ impl App {
                 self.anim.cue_behaviors = !self.cfg.calm;
                 self.save();
             }
+            TrayAction::ToggleKeyEcho => self.set_key_echo(!self.cfg.key_echo),
             TrayAction::ToggleBreathing => {
                 self.cfg.breathing = !self.cfg.breathing;
                 self.anim.breathing = self.cfg.breathing;
@@ -402,6 +441,14 @@ impl App {
                 self.save();
             }
             TrayAction::Size(s) => self.set_size(s),
+            TrayAction::Job(i) => {
+                let job = self.tray.as_ref().and_then(|t| t.job(i)).map(str::to_string);
+                self.cfg.job = job;
+                self.manifest.job = self.cfg.job.clone();
+                self.anim.set_job(self.cfg.job.as_deref());
+                self.request_redraw();
+                self.save();
+            }
             TrayAction::Character(i) => {
                 if let Some(name) = self.tray.as_ref().and_then(|t| t.character(i)).map(str::to_string) {
                     self.switch_character(&name);
@@ -434,7 +481,10 @@ impl App {
             return;
         }
         let m = match Manifest::load(Some(name)) {
-            Ok(m) => m,
+            Ok(mut m) => {
+                m.job = self.cfg.job.clone();
+                m
+            }
             Err(e) => {
                 log::warn!("캐릭터 {name} 로딩 실패: {e}");
                 if let Some(t) = &self.tray {
@@ -446,7 +496,13 @@ impl App {
         let now = Instant::now();
         if let Some(g) = &mut self.gpu {
             let layers = render::load_layers(&m);
+            g.spot = render::head_spot(&layers);
+            if let Some((x, top)) = g.spot {
+                self.keys.set_spot(x, top);
+            }
+            self.keys.clear();
             g.hit = HitMap::new(&layers, 128);
+            g.props = PropHits::new(&layers, 128);
             g.renderer.set_layers(layers, m.canvas);
         }
         self.pet = Pet::new(m.timing.clone(), m.keys.clone(), now);
@@ -471,20 +527,44 @@ impl App {
         if (s - old).abs() < 0.5 {
             return;
         }
+        let old_pad = self.pad();
         self.cfg.size = s;
         self.anim.set_size_pt(self.manifest.canvas, s as f32);
+        let pad = self.pad();
         if let Some(w) = &self.window {
             if let Ok(p) = w.outer_position() {
                 let p = p.to_logical::<f64>(w.scale_factor());
-                let (x, y) = (p.x + (old - s) / 2.0, p.y + (old - s));
-                w.set_outer_position(LogicalPosition::new(x, y));
+                // 캐릭터 정사각형 좌상단 기준으로 계산하고, 창은 띠만큼 위에 둔다
+                let (x, y) = (p.x + (old - s) / 2.0, p.y + old_pad + (old - s));
+                w.set_outer_position(LogicalPosition::new(x, y - pad));
                 self.cfg.position = Some((x, y));
             }
-            let _ = w.request_inner_size(LogicalSize::new(s, s));
+            let _ = w.request_inner_size(LogicalSize::new(s, s + pad));
         }
         self.settle_at = Some(Instant::now() + Duration::from_millis(300));
         if let Some(t) = &self.tray {
             t.sync(&self.cfg);
+        }
+        self.request_redraw();
+    }
+
+    /// 입력 키 보기 켜기/끄기. 캐릭터는 제자리에 두고 창만 위로 늘리거나 줄인다.
+    fn set_key_echo(&mut self, on: bool) {
+        if on == self.cfg.key_echo {
+            return;
+        }
+        let old_pad = self.pad();
+        self.cfg.key_echo = on;
+        let pad = self.pad();
+        self.keys.clear();
+        // 우리가 바꾸는 크기라 바깥 변경으로 보고 되돌리지 않게 먼저 표시
+        self.settle_at = Some(Instant::now() + Duration::from_millis(300));
+        if let Some(w) = &self.window {
+            if let Ok(p) = w.outer_position() {
+                let p = p.to_logical::<f64>(w.scale_factor());
+                w.set_outer_position(LogicalPosition::new(p.x, p.y + old_pad - pad));
+            }
+            let _ = w.request_inner_size(LogicalSize::new(self.cfg.size, self.cfg.size + pad));
         }
         self.request_redraw();
     }
@@ -494,7 +574,7 @@ impl App {
         self.settle_at = None;
         if let (Some(w), Some(g)) = (&self.window, &mut self.gpu) {
             let z = w.inner_size();
-            g.renderer.prepare(z.width.max(z.height));
+            g.renderer.prepare(z.width);
         }
         self.save();
         self.request_redraw();
@@ -508,7 +588,7 @@ impl App {
 
     fn schedule(&mut self, el: &ActiveEventLoop) {
         let now = Instant::now();
-        self.redraw_at = self.anim.next_redraw(now);
+        self.redraw_at = [self.anim.next_redraw(now), if self.cfg.key_echo { self.keys.next_redraw(now) } else { None }].into_iter().flatten().min();
         let wake = [self.pet.next_deadline(now), self.redraw_at, self.next_tap_retry, self.settle_at].into_iter().flatten().min();
         el.set_control_flow(match wake {
             Some(t) => ControlFlow::WaitUntil(t),
@@ -535,7 +615,8 @@ impl ApplicationHandler<AppEvent> for App {
         if matches!(cause, StartCause::Init) {
             let proxy = self.proxy.clone();
             let chars = Manifest::available();
-            match Tray::new(&self.cfg, &chars, &self.manifest_folder(), move |a| {
+            let jobs: Vec<(String, String)> = self.manifest.catalog.jobs.iter().map(|j| (j.id.clone(), j.title.clone())).collect();
+            match Tray::new(&self.cfg, &chars, &self.manifest_folder(), &jobs, move |a| {
                 let _ = proxy.send_event(AppEvent::Tray(a));
             }) {
                 Ok(t) => self.tray = Some(t),
@@ -575,6 +656,12 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Input(i, at) => {
                 trace::event(at, "input", || serde_json::json!({ "input": i }));
                 self.pet.on_input(i, at);
+                // 키 이름은 화면에 잠깐 그릴 뿐 남기지 않는다
+                if let (Input::Key(code), true, true) = (i, self.cfg.key_echo, self.cfg.visible) {
+                    if self.keys.push(code, at) {
+                        self.request_redraw();
+                    }
+                }
                 self.sync(Instant::now());
             }
             AppEvent::Cursor(c) => self.on_cursor(c),
@@ -593,9 +680,10 @@ impl ApplicationHandler<AppEvent> for App {
                 // 우리가 바꾼 게 아닌데 크기가 달라졌으면 (창 관리 앱 등) 원래 크기로 되돌린다
                 if let Some(w) = &self.window {
                     let z = size.to_logical::<f64>(w.scale_factor());
-                    if self.settle_at.is_none() && ((z.width - self.cfg.size).abs() > 1.0 || (z.height - self.cfg.size).abs() > 1.0) {
-                        log::info!("바깥에서 창 크기가 {}x{} 로 바뀌어 {} 로 되돌림", z.width, z.height, self.cfg.size);
-                        let _ = w.request_inner_size(LogicalSize::new(self.cfg.size, self.cfg.size));
+                    let h = self.cfg.size + self.pad();
+                    if self.settle_at.is_none() && ((z.width - self.cfg.size).abs() > 1.0 || (z.height - h).abs() > 1.0) {
+                        log::info!("바깥에서 창 크기가 {}x{} 로 바뀌어 {}x{h} 로 되돌림", z.width, z.height, self.cfg.size);
+                        let _ = w.request_inner_size(LogicalSize::new(self.cfg.size, h));
                     }
                 }
                 if let Some(g) = &mut self.gpu {
@@ -614,10 +702,22 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::Moved(pos) => {
                 if let Some(w) = &self.window {
                     let p = pos.to_logical::<f64>(w.scale_factor());
-                    self.cfg.position = Some((p.x, p.y));
+                    self.cfg.position = Some((p.x, p.y + self.pad()));
                 }
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if self.hover => {
+                // 책상 소품을 누르면 소품이 반응하고 캐릭터가 알아챈다 (끌기 대신)
+                if let Some(id) = self.prop_at(self.cursor_uv) {
+                    let now = Instant::now();
+                    if self.anim.tap(&id, now) {
+                        trace::event(now, "prop", || serde_json::json!({ "id": id }));
+                        for name in self.anim.drain_started() {
+                            trace::event(now, "behavior", || serde_json::json!({ "name": name }));
+                        }
+                        self.request_redraw();
+                    }
+                    return;
+                }
                 if let Some(w) = &self.window {
                     self.dragging = true;
                     let _ = w.drag_window();
@@ -691,7 +791,7 @@ fn cli_check(args: &[String]) -> Option<i32> {
 }
 
 /// `--render-state <json> --out <png> [--size px] [--wiggle]`, `--render-all <dir> [--size px]`,
-/// `--render-timeline <dir> [--fps n] [--secs n] [--scenario demo|idle|milestone] [--start 초]`.
+/// `--render-timeline <dir> [--fps n] [--secs n] [--scenario demo|idle|milestone] [--start 초] [--keys]`.
 fn cli_render(args: &[String]) -> Option<Result<(), String>> {
     let get = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
     let state_arg = get("--render-state");
@@ -701,13 +801,22 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
         return None;
     }
     Some((|| {
-        let manifest = match get("--character-dir") {
+        let mut manifest = match get("--character-dir") {
             Some(d) => Manifest::load_dir(std::path::Path::new(&d)),
             None => Manifest::load(get("--character").as_deref()),
         }
         .map_err(|e| e.to_string())?;
+        // --job <id>: 책상에 놓을 직군 소품 (없으면 캐릭터 소품만)
+        manifest.job = get("--job");
         let size: u32 = get("--size").map(|s| s.parse().map_err(|_| "--size")).transpose()?.unwrap_or(480);
-        let mut off = render::Offscreen::new(&manifest, size)?;
+        // --keys: 입력 키 보기를 켠 채로 (캐릭터 위에 말풍선 띠를 더한다, --render-timeline 에서만)
+        let keys_on = tl_arg.is_some() && args.iter().any(|a| a == "--keys");
+        let pad = if keys_on { (size as f64 * typing_pet::keyecho::BAND).round() as u32 } else { 0 };
+        let mut off = render::Offscreen::with_pad(&manifest, size, pad)?;
+        let mut keys = typing_pet::keyecho::KeyEcho::default();
+        if let Some((x, top)) = render::head_spot(&render::load_layers(&manifest)) {
+            keys.set_spot(x, top);
+        }
         if let Some(json) = state_arg {
             let st: PetState = serde_json::from_str(&json).map_err(|e| format!("상태 JSON: {e}"))?;
             let out = get("--out").ok_or("--out 필요")?;
@@ -750,6 +859,9 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
                 while next < inputs.len() && inputs[next].0 <= now_ms {
                     let (ms, i) = inputs[next];
                     pet.on_input(i, t0 + Duration::from_millis(ms));
+                    if let (true, Input::Key(code)) = (keys_on, i) {
+                        keys.push(code, t0 + Duration::from_millis(ms));
+                    }
                     let at = t0 + Duration::from_millis(ms);
                     pet.advance(at);
                     let ev = pet.drain_events();
@@ -762,11 +874,12 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
                 let ev = pet.drain_events();
                 anim.update(st, &ev, now);
                 let started = anim.drain_started();
+                let sprites = keys.sprites(now);
                 if now_ms < start_ms {
                     anim.frame(now);
                     continue;
                 }
-                off.render(&anim.frame(now)).save(format!("{dir}/{f:05}.png")).map_err(|e| e.to_string())?;
+                off.render_scene(&anim.frame(now), &sprites).save(format!("{dir}/{f:05}.png")).map_err(|e| e.to_string())?;
                 log.push(serde_json::json!({
                     "ms": now_ms, "state": st, "score": (pet.score(now) * 10.0).round() / 10.0,
                     "started": started, "playing": anim.playing(now),

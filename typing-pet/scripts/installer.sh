@@ -22,6 +22,12 @@ for d in characters/*/; do
   echo "캐릭터 $name: 이미지 $dst/$src"
   [[ "$src" == "$dst" && "$src" != 0 ]] || missing=1
 done
+if [[ -f characters/_props/props.toml ]]; then
+  src=$(find characters/_props/layers -name '*.png' | wc -l | tr -d ' ')
+  dst=$(find "$APP/Contents/Resources/characters/_props/layers" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
+  echo "책상 소품: 이미지 $dst/$src"
+  [[ "$src" == "$dst" ]] || missing=1
+fi
 [[ "$missing" == 0 ]] || { echo "이미지가 빠졌음" >&2; exit 1; }
 lipo -info "$APP/Contents/MacOS/typing-pet"
 

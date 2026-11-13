@@ -5,10 +5,10 @@
 ```
 characters/<name>/
 ├── manifest.toml   메뉴 이름(title), 레이어 목록, 마스크, 발끝 좌표, 머리/몸 기준점, 마우스 연출 축([swing])
-│                   애니 장면([[scene]]), 캐릭터 고유 행동([[behavior]])
+│                   애니 장면([[scene]]), 캐릭터 고유 행동([[behavior]]), 허용 표정([expressions]), 책상 소품([desk])
 │                   ([timing] [anim] [keys] 로 기본값 덮어쓰기)
 ├── layers/
-│   ├── base.png             책상과 소품까지 포함한 기본 장면
+│   ├── base.png             책상(키보드/마우스만)과 캐릭터. 책상 소품은 _props 에서 따로 얹는다
 │   ├── base_clean.png       (선택) 캐릭터를 지운 책상. 몸 전체 움직임으로 드러나는 자리를 채운다
 │   ├── head/*.png           머리 변형 (마스크 안을 교체)
 │   ├── paw_l/*.png          왼앞발 자세
@@ -17,6 +17,10 @@ characters/<name>/
 │   ├── full/*.png           장면 프레임(full/<장면>_a, _b ..)과 제스처 같은 전체 프레임
 │   └── mask/*.png           head, paw_l, paw_r 영역 마스크, body(머리+몸통, 앞발/키보드 제외)
 └── baseline/       조합 시트 기준 이미지 (scripts/verify.sh)
+
+characters/_props/  모든 캐릭터가 같이 쓰는 책상 소품 (art/scripts/make_props.py 가 만든다)
+├── props.toml      [[prop]] 소품(자리, 누를 때 움직임), [[job]] 직군별 소품 묶음
+└── layers/<id>.png 캔버스 크기, 소품이 제자리에 그려진 그림
 ```
 
 모든 레이어는 같은 크기의 정사각형 캔버스다. `art/scripts/build.sh` 가 생성 원본에서 만든다.
@@ -25,6 +29,76 @@ characters/<name>/
 없으면 `paw_r/mouse` 한 장으로 가만히 있다.
 메뉴바의 **캐릭터** 메뉴에 `_` 로 시작하지 않는 폴더가 manifest 의 `title`(없으면 폴더 이름) 순으로 나오고, 고르면 바로 바뀌며 설정에 저장된다.
 설정에서 캐릭터를 지정하지 않았거나 지정한 폴더가 없으면 그 목록의 첫 번째(지금은 우사기)를 쓴다.
+
+## 애니에 나온 표정만 ([expressions])
+
+머리 레이어는 manifest `[expressions]` 에 애니 근거(회차/프레임 id)와 함께 적힌 것만 그린다. `head/normal` 은 항상 허용.
+여기 없는 머리는 파일이 있어도 머리 단계(excited, dizzy, overheat, sleepy), 선글라스 이스터에그, behavior 의 머리 바꾸기 어디서도
+그리지 않고 `head/normal` 로 대신한다 (`src/anim.rs` `Layers::resolve`). 선글라스 소품(`fx/sunglasses`)도 `head/sunglasses` 가 허용될 때만 나온다.
+
+```toml
+[expressions]
+"head/excited" = "e066-007, e015-014 '우라!' 입 크게 벌린 얼굴"
+"head/haa" = "e036-024 '하아?'"
+```
+
+picks.json 에 `"_expressions": {...}` 로 적으면 slice.py 가 넣는다. 근거 없이 그린 표정(땀 흘리는 멍한 얼굴, 김 나는 화난 얼굴,
+픽셀 선글라스 등)은 넣지 않는다. 단계 반응은 표정 대신 motion/fx behavior 로 한다.
+`--check` 는 behavior 가 허용되지 않은 머리를 쓰거나 근거가 비어 있으면 실패한다.
+
+| 캐릭터 | 허용 표정 |
+|---|---|
+| 우사기 | excited (e066-007, e015-014), haa (e036-024) |
+| 치이카와 | overheat = 울먹임 (e185-028) |
+| 하치와레 | excited (e169-007), overheat = 눈 감고 웃음 (e112-015, e010-005), tongue (e169-007) |
+
+## 책상 소품과 직군 ([desk], characters/_props)
+
+책상 위 물건은 캐릭터 그림에 넣지 않고 공용 소품 레이어로 얹는다. 자리는 세 곳이다 (캔버스 px, 바닥 가운데).
+
+| 자리 | foot | 누가 채우나 |
+|---|---|---|
+| `left_back` (키보드 왼쪽 뒤) | [162, 784] | 직군 |
+| `left_front` (키보드 왼쪽 앞) | [212, 896] | 직군 |
+| `right_back` (마우스 오른쪽) | [858, 786] | 캐릭터 소품 (`[desk] item`) |
+
+메뉴바 **직군 (책상 장비)** 에서 고르면 바로 바뀌고 설정(`job`)에 저장된다. 처음엔 `기본`.
+
+| 직군 | left_back | left_front |
+|---|---|---|
+| 기본 | 연필꽂이 | 과자와 별 쿠션 (예전 그림에서 잘라 옴) |
+| 개발자 | 커피 머그 | 고무 오리 |
+| 디자이너 | 붓 꽂은 병 | 팔레트 |
+| 작가 | 책 더미 | 노트와 만년필 |
+| 학생 | 스탠드 | 연필과 지우개 |
+| 기획자 | 탁상 달력 | 포스트잇 |
+
+캐릭터 소품: 우사기 푸딩, 치이카와 브로콜리, 하치와레 카메라 (새 캐릭터는 행동 시트의 `## 책상 소품`).
+
+**상호작용**: 소품을 누르면 (끌기 대신) 소품이 `[[prop.tap]]` 움직임(hop, tremble, squash 등, 없으면 작게 통통)을 하고
+캐릭터에게 `prop` cue 를 알린다. 캐릭터는 `on = "prop"` behavior 로 반응한다 (`--check` 필수 규칙).
+
+```toml
+[desk]
+item = "pudding"            # props.toml 의 id
+
+[desk.hide]                 # slice.py 가 계산: 이 장면 프레임이 보이는 동안 이 자리 소품을 숨김 (캐릭터 팔이 덮는 곳)
+"full/staff_b" = ["right_back"]
+```
+
+새 소품/직군 추가:
+
+1. `art/_props/prompts/<번호>_prop_<이름>.txt` 에 물건 설명과 자리 문장을 쓰고
+   `art/scripts/gen.sh -c _props -i art/_desk/desk_empty.png -n 2 <파일>` (빈 책상에 그 물건만 그려 넣은 그림).
+2. `art/_props/props.json` 의 `props` 에 `{"title", "slot", "src": "<고른 후보>", "tap": [...]}`, 직군은 `jobs` 에.
+3. `cd art/scripts && ../.venv/bin/python make_props.py` (빈 책상과 달라진 덩어리를 잘라 자리 크기에 맞춰 놓는다).
+
+예전처럼 소품까지 그려 넣은 캐릭터는 picks.json 에 `"desk_empty": "<그 캐릭터의 소품만 지운 책상 후보>"` 를 적으면
+slice.py 가 모든 레이어에서 소품 자리(`art/_desk/item_mask.png`)를 빈 책상으로 바꾼다.
+`art/_desk/` (빈 책상, 소품 자리 마스크, 소품을 지운 우사기)는 `art/scripts/make_desk.py` 가 만든다. 새 캐릭터는 `art/_desk/usagi_noitems.png`
+(키보드/마우스만 있는 책상)를 base 입력으로 쓰면 처음부터 소품이 없다.
+
+`--render-all`, `--render-timeline`, `--render-state` 에 `--job <id>` 를 주면 그 직군 소품을 얹어 그린다.
 
 ## 애니 장면 ([[scene]])
 
@@ -44,7 +118,7 @@ duration_ms = 6000        # 없으면 [timing] 의 gesture_ms / idle_scene_ms / 
 - idle/milestone 장면이 없는 캐릭터는 그 연출을 하지 않고, gesture 장면이 없으면 `full/gesture` 한 장을 쓴다.
 - 같은 조건의 장면이 여러 개면 돌아가며 고른다.
 
-움직임이 더 필요한 장면은 `frames` 대신 단계(`step`), 숨쉬기(`breathe`), 소품(`fx`)을 쓴다. 우사기 수면 장면:
+움직임이 더 필요한 장면은 `frames` 대신 단계(`step`), 숨쉬기(`breathe`), 소품(`fx`)을 쓴다. 예 (단계 여러 개를 쓰는 수면 장면):
 
 ```toml
 [[scene]]
@@ -89,17 +163,17 @@ build.sh 의 `art/scripts/extract_fx.py` 가 두 그림의 차이만 잘라 `fx/
 
 | 캐릭터 | idle | milestone | gesture (과열이 식을 때) |
 |---|---|---|---|
-| 우사기 | 책상에서 졸기: 콧방울/Zzz 비렘과 눈 굴리며 중얼대는 렘 반복 (만화 2023-02-06, 2026-09-09) | "야하!" 양팔 번쩍 + 통통 + 말풍선 (e204) | 해골 지팡이 휘두르며 흔들기 (e036) |
-| 치이카와 | 브로콜리 먹고 감동해서 눈물, 숨쉬기 (e004) | 제초 검정 5급 합격증 들어 올리며 통통 (e060, e224) | 엉엉 울며 부들부들 + 눈물 (e224, e185) |
+| 우사기 | 책상에서 졸기: 감은 눈 + 콧방울/Zzz + 숨쉬기 (만화 2023-02-06, 2026-09-09) | "야하!" 외치는 얼굴 + 말풍선 (e204) | 해골 지팡이 휘두르며 흔들기 (e036) |
+| 치이카와 | 브로콜리 먹고 감동해서 울먹임, 숨쉬기 (e004) | 제초 검정 5급 합격증 들어 보이며 통통 (e060, e224) | 눈물 흘리며 부들부들 (e224, e185) |
 | 하치와레 | 코스 요리 책 읽기, 숨쉬기 (e201) | 카메라로 사진 찍기 + 플래시 (e037, e216) | 기타 치며 노래 + 음표, 흔들기 |
 
 장면 밖의 고유 행동 (`[[behavior]]`, 자세한 근거는 `art/<이름>/BEHAVIORS.md`):
 
 | 캐릭터 | 성격 | 행동 (cue) |
 |---|---|---|
-| 우사기 | 시끄럽고 몸이 먼저 나감 | "우라!" 말풍선 + 점프 (level:excited), 프루루루 고속 진동 (level:dizzy 동안), 과열에 들썩 + 볼에서 김 나는 얼굴 (level:overheat), "하아?" (wake), 타자 들썩임 (burst), 귀 쫑긋 (ambient) |
-| 치이카와 | 겁 많고 잘 욺 | "왓!" 깜짝 + 땀방울 (wake), 부들부들 (level:dizzy 동안), 울먹이는 과열 얼굴 + 눈물 (level:overheat), 지우면 움찔 (key:backspace) |
-| 하치와레 | 밝고 낙천적 | "어떻게든 되겠지!" 말풍선 + 땀 흘리며 웃는 과열 얼굴 (level:overheat), 음표 흥얼거리기 (level:excited 동안), 혀 내밀고 웃기 (ambient), 반가워 (wake) |
+| 우사기 | 시끄럽고 몸이 먼저 나감 | "우라!" 말풍선 (level:excited), 프루루루 고속 진동 (level:dizzy 동안), 과열에 부르르 (level:overheat), "하아?" (wake), 귀 쫑긋 (ambient) |
+| 치이카와 | 겁 많고 잘 욺 | 울먹이며 깜짝 + 땀방울 (wake), 부들부들 (level:dizzy 동안), 울먹이는 과열 얼굴 + 눈물 (level:overheat), 브로콜리 누르면 감동 (prop) |
+| 하치와레 | 밝고 낙천적 | "어떻게든 되겠지!" 말풍선 + 땀 흘리며 웃는 과열 얼굴 (level:overheat), 음표 흥얼거리기 (level:excited 동안), 혀 내밀고 웃기 (ambient) |
 
 말풍선 대사는 한국어 더빙 기준이다.
 괄호는 참고한 애니 회차 (`art/<이름>/ref/scene/` 에 크롭). 만드는 법:
@@ -123,6 +197,7 @@ build.sh 의 `art/scripts/extract_fx.py` 가 두 그림의 차이만 잘라 `fx/
 | `burst` | 짧은 시간에 몰아친 키 | `burst_window_ms` (1000), `burst_keys` (9) |
 | `key:<enter\|backspace\|space\|tab\|escape\|delete>` | 그 키를 누를 때 (키 코드만 비교하고 저장하지 않음) | |
 | `ambient` | 평소 상태에서 무작위 간격 (장면 중엔 건너뜀) | `ambient_every_s` ([60, 180]) |
+| `prop` | 책상 소품을 누를 때 | |
 
 ```toml
 [[behavior]]
@@ -183,6 +258,8 @@ picks.json 에는 `"_behaviors": {"<이름>": {"on": "...", "motion": [...], "fx
 | 다른 캐릭터와 behavior 이름, 레이어 파일이 겹치지 않음 | 복사해 놓고 이름만 바꾼 캐릭터 방지 |
 | `ambient_every_s` 최소 60초 | 시끄러움 방지 |
 | 쓰는 레이어가 모두 있고 cue 이름 오타 없음 | manifest 검사 |
+| behavior 가 쓰는 머리는 `[expressions]` 에 애니 근거가 있음 | 애니에 없는 표정 방지 |
+| `[desk] item` 소품이 있고 `prop` cue behavior 가 1개 이상 | 책상 소품 상호작용 |
 
 `_test` 는 이 규칙에서 빠지지만 모든 cue/motion/fx 종류를 쓰는 가짜 behavior(`t_*`)가 있어 엔진 테스트(`tests/behavior.rs`)와 기준 이미지에 쓴다.
 
