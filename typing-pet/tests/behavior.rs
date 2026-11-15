@@ -336,38 +336,39 @@ fn motion_values_over_time() {
     assert!(at(&late, 200.0, None).is_identity() && !at(&late, 450.0, None).is_identity());
 }
 
+/// 프레임의 변형 (캐릭터 레이어는 모두 같은 값이어야 한다).
+fn deform(f: &Frame) -> Option<typing_pet::anim::Deform> {
+    let defs: Vec<_> = f.cmds.iter().filter_map(|c| c.deform.clone()).collect();
+    assert!(defs.windows(2).all(|w| w[0] == w[1]), "레이어마다 다른 변형이면 이음매가 생긴다");
+    defs.into_iter().next()
+}
+
 #[test]
-fn body_motion_moves_character_inside_body_mask_only() {
+fn body_motion_deforms_whole_character_seamlessly() {
     let m = test_manifest();
     let (mut a, t) = forced(&m, Head::Normal, "t_bounce");
     let f = a.frame(t + ms(130)); // 첫 hop 정점 근처
     let names: Vec<String> = f.cmds.iter().map(layer_name).collect();
-    assert_eq!(&names[..3], &["base", "base_clean", "base"], "{names:?}");
-    let moved = &f.cmds[2];
-    assert_eq!(moved.mask.as_deref(), Some("mask/body"));
-    assert!(moved.offset[1] < -5.0, "몸이 위로 {:?}", moved.offset);
-    assert_eq!(f.cmds[0].offset, [0.0, 0.0], "책상은 제자리");
-    // 앞발은 키보드 위에 그대로, 머리는 몸을 따라 (squash 도 같이)
-    assert_eq!(find(&f, "paw_l/up").unwrap().offset, [0.0, 0.0]);
-    // 앞발은 키보드 윗줄 아래(paw_l_low)는 제자리, 위(paw_l_top, 팔)는 몸을 따라간다
-    let paws: Vec<&DrawCmd> = f.cmds.iter().filter(|c| layer_name(c) == "paw_l/up").collect();
-    assert_eq!(paws.len(), 2);
-    assert_eq!((paws[0].mask.as_deref(), paws[0].offset), (Some("mask/paw_l_low"), [0.0, 0.0]));
-    assert_eq!(paws[1].mask.as_deref(), Some("mask/paw_l_top"));
-    assert!(paws[1].offset[1] < -5.0);
-    let head = find(&f, "head/normal").unwrap();
-    assert!(head.offset[1] < -5.0);
+    assert_eq!(&names[..4], &["base", "paw_l/up", "paw_r/up", "head/normal"], "{names:?}");
+    // 잘라 옮기지 않는다: 책상 채우기(base_clean)도, 자리 이동도 없이 변형장 하나로
+    assert!(find(&f, "base_clean").is_none());
+    assert!(f.cmds[..4].iter().all(|c| c.offset == [0.0, 0.0] && c.deform.is_some()));
+    let d = deform(&f).expect("변형");
+    assert_eq!(d.field, "mask/warp");
+    assert!(d.body.offset[1] < -5.0, "몸이 위로 {:?}", d.body);
     assert!(a.animating(t + ms(130)));
     // 끝나면 원래 합성
     let f = a.frame(t + ms(800));
-    assert!(find(&f, "base_clean").is_none() && f.cmds.iter().all(|c| c.offset == [0.0, 0.0] && c.squash == [1.0, 1.0]));
-    assert_eq!(find(&f, "paw_l/up").unwrap().mask.as_deref(), Some("mask/paw_l"), "가만히 있으면 앞발 마스크 한 장");
+    assert!(deform(&f).is_none() && f.cmds.iter().all(|c| c.offset == [0.0, 0.0] && c.squash == [1.0, 1.0]));
+    assert_eq!(find(&f, "paw_l/up").unwrap().mask.as_deref(), Some("mask/paw_l"));
     assert!(!a.animating(t + ms(1100)));
 }
 
 #[test]
 fn body_motion_without_clean_desk_is_limited_to_2pt() {
+    // 변형장이 없는 예전 캐릭터만 마스크로 잘라 옮긴다
     let mut m = test_manifest();
+    m.masks.remove("warp");
     m.layers.retain(|l| l != "base_clean");
     let (mut a, t) = forced(&m, Head::Normal, "t_bounce");
     let f = a.frame(t + ms(130));
@@ -386,8 +387,9 @@ fn head_swap_and_nod() {
         k => panic!("섞는 중이어야 함 {k:?}"),
     }
     let f = a.frame(t + ms(300));
-    let h = find(&f, "head/alt_a").expect("바뀐 머리");
-    assert!(h.offset[1] > 0.0, "끄덕 {:?}", h.offset);
+    assert!(find(&f, "head/alt_a").is_some(), "바뀐 머리");
+    let d = deform(&f).expect("변형");
+    assert!(d.head.offset[1] > 0.0 && d.body.offset == [0.0, 0.0], "머리만 끄덕 {d:?}");
     let f = a.frame(t + ms(700));
     assert!(find(&f, "head/normal").is_some(), "끝나면 원래 머리");
     // 두 장 교대 (ambient)
@@ -474,7 +476,7 @@ fn wake_plays_full_behavior_then_returns() {
     assert_eq!(s.pet.state(s.at(20_000)).pose, None, "pet 장면과 따로 논다");
     let f = s.anim.frame(s.at(20_150));
     assert_eq!(s.anim.full_layer(s.at(20_400)), Some("full/startle"));
-    assert!(f.cmds.iter().any(|c| c.mask.as_deref() == Some("mask/body") && c.offset[1] < 0.0), "full 도 몸 마스크 안을 띄운다");
+    assert!(deform(&f).is_some_and(|d| d.body.offset[1] < 0.0), "full 도 몸을 띄운다");
     assert!(s.anim.next_redraw(s.at(20_400)).is_some());
     // 800ms 뒤 끝나고 원래 합성으로 페이드
     s.sync(20_801);
@@ -518,7 +520,7 @@ fn hold_repeats_while_level_lasts() {
     let m = test_manifest();
     let (mut a, t) = forced(&m, Head::Overheat, "t_shiver");
     // 600ms 재생, 400ms 쉼, 반복
-    let shaking = |a: &mut Animator, d: u64| a.frame(t + ms(d)).cmds.iter().any(|c| c.offset[0] != 0.0);
+    let shaking = |a: &mut Animator, d: u64| deform(&a.frame(t + ms(d))).is_some_and(|x| x.body.offset[0] != 0.0);
     assert!(shaking(&mut a, 300) && !shaking(&mut a, 800) && shaking(&mut a, 1300));
     assert_eq!(a.next_redraw(t + ms(700)), Some(t + ms(1000)), "쉬는 동안은 다음 재생 때 깨어남");
     assert!(!a.animating(t + ms(800)));

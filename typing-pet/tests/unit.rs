@@ -457,8 +457,8 @@ fn level_up_pops_head_and_dizzy_wiggles() {
     let mut a = Animator::new(&m, 240.0, t0);
     a.update(PetState { head: Head::Dizzy, ..Default::default() }, &[], t0);
     let f = a.frame(t0 + ms(70));
-    let head = f.cmds.iter().find(|c| c.layers().iter().any(|l| l.starts_with("head/"))).unwrap();
-    assert!(head.scale > 1.0, "팝");
+    let d = f.cmds.iter().find_map(|c| c.deform.clone()).expect("팝은 머리 변형");
+    assert!(d.head.s[0] > 1.0 && d.head.s[1] > 1.0, "팝 {d:?}");
     let names: BTreeSet<String> = (0..20)
         .flat_map(|i| a.frame(t0 + ms(400 + i * 40)).layer_names().into_iter().map(String::from).collect::<Vec<_>>())
         .collect();
@@ -698,13 +698,10 @@ fn scene_breathe_and_fx_move() {
     let t0 = Instant::now();
     let mut a = Animator::new(&m, 240.0, t0);
     a.update(PetState { pose: Some(Pose::Idle), ..Default::default() }, &[], t0);
-    // 숨쉬기: 머리 마스크 안을 오르내리는 명령이 따로 있다 (1/4 주기에서 가장 높이)
-    let f = a.frame(t0 + ms(1000));
-    let head = f.cmds.iter().find(|c| c.mask.as_deref() == Some("mask/head")).expect("숨쉬기 명령");
-    assert!(head.offset[1] < 0.0, "위로 {:?}", head.offset);
-    let f = a.frame(t0 + ms(3000));
-    let head = f.cmds.iter().find(|c| c.mask.as_deref() == Some("mask/head")).unwrap();
-    assert!(head.offset[1] > 0.0, "아래로 {:?}", head.offset);
+    // 숨쉬기: 장면 프레임을 머리 가중치만큼 오르내린다 (1/4 주기에서 가장 높이)
+    let head_dy = |f: &typing_pet::anim::Frame| f.cmds.iter().find_map(|c| c.deform.as_ref().map(|d| d.head.offset[1])).expect("숨쉬기 변형");
+    assert!(head_dy(&a.frame(t0 + ms(1000))) < 0.0, "위로");
+    assert!(head_dy(&a.frame(t0 + ms(3000))) > 0.0, "아래로");
     // pulse: anchor 를 기준으로 scale 범위 안에서 커졌다 작아진다 (장면이 나타나는 페이드 뒤부터 본다)
     let scales: Vec<f32> = (3..10).map(|i| fx_cmds(&a.frame(t0 + ms(i * 100)))[0].scale).collect();
     let (lo, hi) = scales.iter().fold((f32::MAX, f32::MIN), |(l, h), &s| (l.min(s), h.max(s)));
@@ -796,14 +793,13 @@ fn clamp_size_range() {
 
 fn swing_manifest() -> Manifest {
     let mut m = test_manifest();
-    m.layers.push("paw_r/mouse_bg".into());
-    m.layers.push("fx/mouse_arm".into());
-    m.swing = Some(typing_pet::config::Swing { root: [300.0, 300.0], tip: [340.0, 400.0], radius: [20.0, 40.0] });
+    assert!(m.masks.contains_key("warp"), "_test 에 mask/warp 가 있어야 한다 (art/scripts/warp_field.py)");
+    m.swing = Some(typing_pet::config::Swing { max_px: [6.0, 4.0] });
     m
 }
 
 #[test]
-fn mouse_move_swings_only_the_arm() {
+fn mouse_move_slides_hand_with_one_deform() {
     let m = swing_manifest();
     let t0 = Instant::now();
     let mut pet = Pet::new(m.timing.clone(), m.keys.clone(), t0);
@@ -816,23 +812,22 @@ fn mouse_move_swings_only_the_arm() {
         assert!(ev.contains(&PetEvent::MouseMove));
         a.update(pet.state(t), &ev, t);
     }
-    let names = |f: &typing_pet::anim::Frame| f.layer_names().into_iter().map(String::from).collect::<Vec<_>>();
     let f = a.frame(t0 + ms(950));
-    assert!(names(&f).contains(&"paw_r/mouse_bg".to_string()) && names(&f).contains(&"fx/mouse_arm".to_string()));
-    assert!(!names(&f).contains(&"paw_r/mouse".to_string()), "한 장짜리 마우스 자세 대신 바탕 + 팔");
-    // 팔만 휘고(warp), 다른 레이어는 움직이지 않는다
+    assert!(f.layer_names().contains(&"paw_r/mouse"));
+    // 캐릭터 레이어는 모두 같은 변형으로(이음매 없이), 자리 이동/배율은 없다. 변위는 최대 변위의 90% 안
     let mut moved = 0;
     for k in 0..12 {
         let f = a.frame(t0 + ms(300 + k * 25));
-        for c in &f.cmds {
-            if let Some(w) = &c.warp {
-                assert!(matches!(&c.kind, DrawKind::Layer { name } if name == "fx/mouse_arm"));
-                if w.d[0].abs() > 1.0 {
-                    moved += 1;
-                }
-            } else {
-                assert_eq!(c.offset[0], 0.0);
+        let defs: Vec<_> = f.cmds.iter().filter_map(|c| c.deform.clone()).collect();
+        if let Some(d) = defs.first() {
+            assert!(defs.iter().all(|x| x == d), "레이어마다 다른 변형");
+            assert!(d.mouse[0].abs() <= 6.0 * 0.9 + 1e-3 && d.mouse[1].abs() <= 4.0 * 0.9 + 1e-3, "{:?}", d.mouse);
+            if d.mouse[0].abs() > 1.0 {
+                moved += 1;
             }
+        }
+        for c in f.cmds.iter().filter(|c| c.deform.is_some()) {
+            assert_eq!((c.offset, c.scale), ([0.0, 0.0], 1.0));
         }
     }
     assert!(moved >= 6, "흔들리는 프레임 {moved}");
@@ -843,21 +838,21 @@ fn mouse_move_swings_only_the_arm() {
     a.update(pet.state(t), &pet.drain_events(), t);
     assert_eq!(pet.state(t).paw_r, PawR::Mouse);
     let f = a.frame(t);
-    let w = f.cmds.iter().find_map(|c| c.warp).expect("팔");
-    assert_eq!(w.d, [0.0, 0.0]);
+    assert!(f.cmds.iter().all(|c| c.deform.is_none()), "멈추면 변형 없이 원래 그림");
     assert!(!a.animating(t));
 }
 
 #[test]
-fn mouse_pose_without_swing_layers_is_one_layer() {
-    let m = test_manifest();
+fn mouse_pose_without_field_is_one_layer() {
+    let mut m = test_manifest();
+    m.masks.remove("warp");
     let t0 = Instant::now();
     let mut a = Animator::new(&m, 240.0, t0);
     let s = PetState { paw_r: PawR::Mouse, ..Default::default() };
     a.update(s, &[PetEvent::MouseMove], t0);
     let f = a.frame(t0 + ms(50));
     assert!(f.layer_names().contains(&"paw_r/mouse"));
-    assert!(f.cmds.iter().all(|c| c.warp.is_none()));
+    assert!(f.cmds.iter().all(|c| c.deform.is_none()));
     assert!(!a.animating(t0 + ms(50)));
 }
 

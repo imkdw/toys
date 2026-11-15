@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 생성 원본(art/<이름>/raw) -> 캐릭터 레이어(characters/<이름>) 후처리 전체 실행 (PLAN 3.5).
-#   chroma -> align -> colormatch -> automask(마스크 없을 때만) -> slice -> preview
+#   chroma -> align -> colormatch -> automask(마스크 없을 때만) -> slice -> warp_field -> preview
 # 사용법: art/scripts/build.sh [--remask] [--name usagi]
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -34,4 +34,6 @@ for p in $mapfile_picks; do [[ "$p" != "$base" ]] && vars+=("$W/chroma/$p.png");
 "$PY" "$S/automask.py" --name "$name" $remask
 "$PY" "$S/extract_fx.py" --name "$name"
 "$PY" "$S/slice.py" --name "$name"
+# 움직임 변형장 mask/warp + manifest [swing] (slice.py 가 manifest 를 새로 쓰므로 그 다음에, docs/MOTION_QA.md)
+"$PY" "$S/warp_field.py" --name "$name"
 "$PY" "$S/preview.py" --name "$name" -o "$W/preview"

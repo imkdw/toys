@@ -152,22 +152,12 @@ pub struct Desk {
     pub hide: BTreeMap<String, Vec<String>>,
 }
 
-/// 마우스를 움직이는 동안 fx/mouse_arm 을 휘게 그리는 축 (캔버스 px).
-/// root(어깨) 에서는 안 움직이고 tip(손끝) 쪽으로 갈수록 크게 움직인다.
+/// 마우스 연출: 마우스를 움직이는 동안 손과 마우스를 `mask/warp` 의 B 채널만큼 민다 (docs/MOTION_QA.md).
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Swing {
-    pub root: [f32; 2],
-    pub tip: [f32; 2],
-    /// 축에서 이 거리까지는 다 움직이고, `radius[1]` 밖은 안 움직인다.
-    #[serde(default = "Swing::default_radius")]
-    pub radius: [f32; 2],
-}
-
-impl Swing {
-    fn default_radius() -> [f32; 2] {
-        [45.0, 95.0]
-    }
+    /// 접히지 않고 밀 수 있는 최대 변위 (캔버스 px, 가로/세로). art/scripts/warp_field.py 가 계산한다.
+    pub max_px: [f32; 2],
 }
 
 /// 애니메이션 장면 하나: 전체 프레임 레이어 여러 장을 `frame_ms` 마다 돌려 그린다.
@@ -627,7 +617,7 @@ pub struct Anim {
 impl Default for Anim {
     fn default() -> Self {
         Self {
-            head_fade_ms: 250,
+            head_fade_ms: 120,
             pop_ms: 200,
             pop_scale: 1.04,
             glow_ms: 220,
@@ -641,7 +631,7 @@ impl Default for Anim {
             breathe_period_s: 3.0,
             breathe_pt: 1.5,
             breathe_fps: 30.0,
-            swing_pt: [4.0, 1.2],
+            swing_pt: [2.0, 0.25],
             swing_hz: 3.5,
             swing_hold_ms: 200,
             swing_fade_ms: 150,

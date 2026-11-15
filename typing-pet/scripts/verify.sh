@@ -62,6 +62,15 @@ for d in characters/*/; do
   fi
 done
 
+# ---------- 움직임 품질 (docs/MOTION_QA.md): 변형장 + 모든 behavior/시나리오 렌더 판정 ----------
+if [[ -z "$update" ]]; then
+  if scripts/motion_qa.sh >"$OUT/motion_qa.log" 2>&1; then
+    record "움직임 품질" PASS "target/motion_qa/report.md"
+  else
+    record "움직임 품질" FAIL "target/motion_qa/report.md ($(grep -c '^\[FAIL\]' "$OUT/motion_qa.log")개 캐릭터)"
+  fi
+fi
+
 # ---------- 3층: 오프스크린 조합 시트 + 기준 이미지 ----------
 chars=("_test")
 # 실제 캐릭터: characters/ 아래 manifest.toml 이 있고 _ 로 시작하지 않는 폴더 전부 (usagi 를 맨 뒤에 두어 --live 기본값으로)

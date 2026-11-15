@@ -123,7 +123,7 @@ impl App {
         let now = Instant::now();
         manifest.job = cfg.job.clone();
         let mut pet = Pet::new(manifest.timing.clone(), manifest.keys.clone(), now);
-        let mut anim = Animator::new(&manifest, cfg.size as f32, now);
+        let mut anim = Animator::new(&manifest, typing_pet::anim::REF_SIZE_PT, now);
         anim.breathing = cfg.breathing;
         anim.cue_behaviors = !cfg.calm;
         seed(&mut pet, &mut anim, now);
@@ -506,7 +506,7 @@ impl App {
             g.renderer.set_layers(layers, m.canvas);
         }
         self.pet = Pet::new(m.timing.clone(), m.keys.clone(), now);
-        self.anim = Animator::new(&m, self.cfg.size as f32, now);
+        self.anim = Animator::new(&m, typing_pet::anim::REF_SIZE_PT, now);
         self.anim.breathing = self.cfg.breathing;
         self.anim.cue_behaviors = !self.cfg.calm;
         seed(&mut self.pet, &mut self.anim, now);
@@ -797,7 +797,8 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
     let state_arg = get("--render-state");
     let all_arg = get("--render-all");
     let tl_arg = get("--render-timeline");
-    if state_arg.is_none() && all_arg.is_none() && tl_arg.is_none() {
+    let bhv_arg = get("--render-behaviors");
+    if state_arg.is_none() && all_arg.is_none() && tl_arg.is_none() && bhv_arg.is_none() {
         return None;
     }
     Some((|| {
@@ -836,6 +837,28 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
             }
             println!("{dir}");
         }
+        // --pairs: 변형이 있는 프레임마다 변형만 뺀 정지 프레임 <번호>_s.png 도 (움직임 QA)
+        let pairs = args.iter().any(|a| a == "--pairs");
+        if let Some(dir) = bhv_arg {
+            // 모든 behavior 를 처음부터 끝까지: <dir>/<이름>/<번호>.png
+            let fps: u64 = get("--fps").and_then(|s| s.parse().ok()).unwrap_or(20);
+            for b in manifest.all_behaviors() {
+                let Some(frames) = typing_pet::behavior_run(&manifest, &b.name, fps) else { continue };
+                let d = format!("{dir}/{}", b.name);
+                std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+                let mut log = Vec::new();
+                for (i, (f, still)) in frames.iter().enumerate() {
+                    off.render(f).save(format!("{d}/{i:05}.png")).map_err(|e| e.to_string())?;
+                    let def = f.cmds.iter().find_map(|c| c.deform.clone());
+                    if pairs && f != still {
+                        off.render(still).save(format!("{d}/{i:05}_s.png")).map_err(|e| e.to_string())?;
+                    }
+                    log.push(serde_json::json!({ "i": i, "deform": def, "mix": typing_pet::is_blend(f) }));
+                }
+                std::fs::write(format!("{d}/frames.json"), serde_json::to_string(&log).unwrap_or_default()).map_err(|e| e.to_string())?;
+            }
+            println!("{dir}");
+        }
         if let Some(dir) = tl_arg {
             // 시나리오 입력을 실제 상태 머신/연출에 넣고 fps 간격으로 그린다
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -844,9 +867,13 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
             let t0 = Instant::now();
             let mut pet = Pet::new(manifest.timing.clone(), manifest.keys.clone(), t0);
             let mut anim = Animator::new(&manifest, 240.0, t0);
+            // --pairs: 움직임만 뺀 manifest 로 같은 입력을 받는 두 번째 애니메이터 (정지 기준 프레임)
+            let still_m = typing_pet::still_manifest(&manifest);
+            let mut still = Animator::new(&still_m, 240.0, t0);
+            still.reseed(7);
             let scenario = get("--scenario").unwrap_or_else(|| "demo".into());
             let inputs = typing_pet::scenario_inputs(&scenario)
-                .ok_or(format!("알 수 없는 --scenario: {scenario} (demo, idle, milestone, wake, burst, levels, ambient, keys)"))?;
+                .ok_or(format!("알 수 없는 --scenario: {scenario} (demo, idle, milestone, wake, burst, levels, ambient, keys, mouse)"))?;
             // 같은 시나리오는 같은 결과 (캐릭터끼리 비교할 수 있게)
             pet.reseed(7, t0);
             anim.reseed(7);
@@ -866,6 +893,7 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
                     pet.advance(at);
                     let ev = pet.drain_events();
                     anim.update(pet.state(at), &ev, at);
+                    still.update(pet.state(at), &ev, at);
                     next += 1;
                 }
                 let now = t0 + Duration::from_millis(now_ms);
@@ -873,16 +901,25 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
                 let st = pet.state(now);
                 let ev = pet.drain_events();
                 anim.update(st, &ev, now);
+                still.update(st, &ev, now);
                 let started = anim.drain_started();
                 let sprites = keys.sprites(now);
                 if now_ms < start_ms {
                     anim.frame(now);
+                    still.frame(now);
                     continue;
                 }
-                off.render_scene(&anim.frame(now), &sprites).save(format!("{dir}/{f:05}.png")).map_err(|e| e.to_string())?;
+                let frame = anim.frame(now);
+                off.render_scene(&frame, &sprites).save(format!("{dir}/{f:05}.png")).map_err(|e| e.to_string())?;
+                let def = frame.cmds.iter().find_map(|c| c.deform.clone());
+                let still_f = still.frame(now);
+                if pairs && still_f != frame {
+                    off.render_scene(&still_f, &sprites).save(format!("{dir}/{f:05}_s.png")).map_err(|e| e.to_string())?;
+                }
                 log.push(serde_json::json!({
                     "ms": now_ms, "state": st, "score": (pet.score(now) * 10.0).round() / 10.0,
-                    "started": started, "playing": anim.playing(now),
+                    "started": started, "playing": anim.playing(now), "deform": def,
+                    "mix": typing_pet::is_blend(&frame),
                 }));
             }
             std::fs::write(format!("{dir}/timeline.json"), serde_json::to_string(&log).unwrap_or_default()).map_err(|e| e.to_string())?;

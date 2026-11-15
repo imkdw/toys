@@ -15,7 +15,8 @@ characters/<name>/
 │   ├── paw_r/*.png          오른앞발 자세 (mouse_bg: 마우스 자세에서 팔을 치운 바탕)
 │   ├── fx/*.png             선글라스 단독, 마우스 잡은 팔(mouse_arm), 장면/행동 소품(bubble, zzz, 말풍선), 플래시(white) (일반 합성)
 │   ├── full/*.png           장면 프레임(full/<장면>_a, _b ..)과 제스처 같은 전체 프레임
-│   └── mask/*.png           head, paw_l, paw_r 영역 마스크, body(머리+몸통, 앞발/키보드 제외)
+│   └── mask/*.png           head, paw_l, paw_r 영역 마스크, body(머리+몸통, 앞발/키보드 제외),
+│                            warp (움직임 변형장: R 몸, G 머리, B 마우스 가중치, art/scripts/warp_field.py)
 └── baseline/       조합 시트 기준 이미지 (scripts/verify.sh)
 
 characters/_props/  모든 캐릭터가 같이 쓰는 책상 소품 (art/scripts/make_props.py 가 만든다)
@@ -25,8 +26,10 @@ characters/_props/  모든 캐릭터가 같이 쓰는 책상 소품 (art/scripts
 
 모든 레이어는 같은 크기의 정사각형 캔버스다. `art/scripts/build.sh` 가 생성 원본에서 만든다.
 앞발/제스처 레이어는 base 와 실제로 달라진 곳만 변형 그림이고 나머지(책상, 키보드)는 base 와 같다.
-`paw_r/mouse_bg` + `fx/mouse_arm` + `[swing]` 이 있으면 마우스를 움직이는 동안 팔만 root 에서 tip 쪽으로 휘며 흔든다.
-없으면 `paw_r/mouse` 한 장으로 가만히 있다.
+몸/머리/마우스 움직임은 레이어를 잘라 옮기지 않고 `mask/warp` 변형장으로 합성된 그림 전체를 민다 (이음매/반투명 선이 생기지 않음).
+마우스를 움직이면 손과 마우스가 패드 위를 미끄러지고 팔이 늘어난다. 변위는 `[swing] max_px` (패드 테두리가 접히지 않는 최대, warp_field.py 가 계산) 안.
+`mask/warp` 가 없는 예전 캐릭터만 마스크로 잘라 옮기고(`base_clean` 으로 채움), 마우스는 `paw_r/mouse` 한 장으로 가만히 있다.
+움직임 품질 기준과 자동 판정은 `docs/MOTION_QA.md`, `scripts/motion_qa.sh` (verify.sh 가 같이 돌린다).
 메뉴바의 **캐릭터** 메뉴에 `_` 로 시작하지 않는 폴더가 manifest 의 `title`(없으면 폴더 이름) 순으로 나오고, 고르면 바로 바뀌며 설정에 저장된다.
 설정에서 캐릭터를 지정하지 않았거나 지정한 폴더가 없으면 그 목록의 첫 번째(지금은 우사기)를 쓴다.
 

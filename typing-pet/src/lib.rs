@@ -82,6 +82,65 @@ pub fn behavior_frames(m: &Manifest) -> Vec<(String, Frame)> {
     v
 }
 
+/// 움직임만 뺀 manifest: behavior/장면의 몸/머리/소품 움직임, 숨쉬기, 머리 팝, 마우스 흔들기를 0 으로.
+/// 같은 입력으로 돌리면 같은 장면/레이어/페이드에 움직임만 없는 "정지 기준" 프레임이 나온다 (움직임 QA, 그리는 방법과 상관없이).
+pub fn still_manifest(m: &Manifest) -> Manifest {
+    let mut s = m.clone();
+    for b in &mut s.behaviors {
+        b.motion.clear();
+        b.breathe = None;
+    }
+    for sc in &mut s.scenes {
+        sc.breathe = None;
+    }
+    s.anim.pop_scale = 1.0;
+    s.anim.swing_pt = [0.0; 2];
+    s.anim.breathe_pt = 0.0;
+    s
+}
+
+/// behavior 하나를 처음부터 끝까지 (길이가 없거나 길면 6초까지) `fps` 로 재생한 (프레임, 움직임을 뺀 같은 프레임) 들 (움직임 QA).
+/// 장면(idle, milestone, gesture) behavior 도 그 pose 에서 강제로 튼다.
+pub fn behavior_run(m: &Manifest, name: &str, fps: u64) -> Option<Vec<(Frame, Frame)>> {
+    let b = m.all_behaviors().into_iter().find(|b| b.name == name)?;
+    let still = still_manifest(m);
+    let t0 = Instant::now();
+    let (mut a, t1) = forced_at(m, &b, t0)?;
+    let (mut s, _) = forced_at(&still, &b, t0)?;
+    let len = b.duration_ms.filter(|&d| d > 0).unwrap_or(if b.on.pose().is_some() { 6_000 } else { crate::config::Behavior::DEFAULT_MS }).min(6_000);
+    let n = len * fps / 1000;
+    Some((0..n).map(|i| { let t = t1 + Duration::from_millis(i * 1000 / fps); (a.frame(t), s.frame(t)) }).collect())
+}
+
+fn forced_at(m: &Manifest, b: &crate::config::Behavior, t0: Instant) -> Option<(Animator, Instant)> {
+    use crate::pet::Cue;
+    let mut a = Animator::new(m, crate::anim::REF_SIZE_PT, t0);
+    a.cue_behaviors = false;
+    let head = match b.on {
+        Cue::Level(h) => h,
+        Cue::Egg => Head::Sunglasses,
+        _ => Head::Normal,
+    };
+    let t1 = t0 + Duration::from_millis(2000);
+    a.update(PetState { head, ..Default::default() }, &[], t0);
+    a.frame(t1);
+    if let Some(p) = b.on.pose() {
+        a.update(PetState { head, pose: Some(p), ..Default::default() }, &[], t1);
+    }
+    a.cue_behaviors = true;
+    a.force(&b.name, t1).then_some((a, t1))
+}
+
+/// 두 그림이 겹쳐 보이는 프레임인가 (크로스페이드, 장면 페이드). 움직임 QA 의 고스트 검사에서 뺀다.
+pub fn is_blend(f: &Frame) -> bool {
+    use crate::anim::DrawKind;
+    f.cmds.iter().any(|c| match &c.kind {
+        DrawKind::Mix { .. } => true,
+        DrawKind::Layer { name } => c.opacity < 0.999 && ["base", "full/", "paw_", "head/"].iter().any(|p| name.starts_with(p)),
+        DrawKind::Glow { .. } => false,
+    })
+}
+
 /// `--scenario` 이름별 입력: demo(기본, [`timeline_inputs`]), idle(키 하나 뒤 입력 없음), milestone(키를 빠르게 계속),
 /// wake(쉬다가 다시 치기), burst(가끔 몰아치기), levels(천천히 과열까지 올렸다 식히기), ambient(키 하나 뒤 오래 가만히, --secs 200 쯤),
 /// keys(Enter/Backspace/Space 등 이름 있는 키).
@@ -95,6 +154,7 @@ pub fn scenario_inputs(name: &str) -> Option<Vec<(u64, crate::input::Input)>> {
         "wake" => Some(typing(300, 2_000, 200).chain(typing(18_000, 22_000, 200)).collect()),
         "burst" => Some((0..4u64).flat_map(|r| typing(500 + r * 3_000, 1_500 + r * 3_000, 70)).collect()),
         "levels" => Some(typing(300, 9_000, 75).chain(typing(9_000, 12_000, 300)).collect()),
+        "mouse" => Some(typing(300, 1_500, 120).chain((0..60u64).map(|k| (2_000 + k * 50, Input::MouseMove))).chain([(3_200, Input::MouseClick), (4_200, Input::MouseClick)]).collect()),
         "keys" => Some([36u16, 51, 51, 51, 49, 48, 53, 117, 36].iter().enumerate().map(|(i, &c)| (300 + i as u64 * 1_500, Input::Key(c))).collect()),
         _ => None,
     }

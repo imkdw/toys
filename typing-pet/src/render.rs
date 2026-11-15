@@ -19,13 +19,18 @@ struct U {
     p: vec4<f32>,    // scale, opacity, mix_t, mode (0 = 레이어 over, 1 = 키 빛, 2 = 마스크 지우기, 3 = 마스크 더하기, 4 = 휘게 over, 5 = 구름 흩어지기)
     g: vec4<f32>,    // 빛 중심.xy, 반경 (uv), _ | 휘기: root.xy, tip.xy (uv) | 구름: 흩어짐 0~1, seed, 가로/세로 비율, _
     c: vec4<f32>,    // 빛 색 (premultiplied) | 휘기: d.xy, 반경 안/밖 (uv)
-    k: vec4<f32>,    // 가로/세로 배율 (squash), _, _
+    k: vec4<f32>,    // 가로/세로 배율 (squash), 변형장 사용(1), _
+    db: vec4<f32>,   // 변형: 몸 anchor.xy, offset.xy (uv)
+    ds: vec4<f32>,   // 변형: 몸 배율.xy, 머리 배율.xy
+    dh: vec4<f32>,   // 변형: 머리 anchor.xy, offset.xy (uv)
+    dm: vec4<f32>,   // 변형: 마우스 이동.xy (uv), _, _
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(1) @binding(0) var ta: texture_2d<f32>;
 @group(1) @binding(1) var tb: texture_2d<f32>;
 @group(1) @binding(2) var smp: sampler;
 @group(1) @binding(3) var tm: texture_2d<f32>;
+@group(1) @binding(4) var tw: texture_2d<f32>;
 
 struct VO {
     @builtin(position) pos: vec4<f32>,
@@ -45,12 +50,13 @@ fn vs(@builtin(vertex_index) i: u32) -> VO {
     return o;
 }
 
-// 휘기 세기: root -> tip 축을 따라 0 -> 1, 축에서 멀어지면 0
-fn warp_w(uv: vec2<f32>) -> f32 {
-    let ab = u.g.zw - u.g.xy;
-    let t = dot(uv - u.g.xy, ab) / max(dot(ab, ab), 1e-6);
-    let q = u.g.xy + clamp(t, 0.0, 1.0) * ab;
-    return smoothstep(0.05, 0.85, t) * (1.0 - smoothstep(u.c.z, u.c.w, distance(uv, q)));
+// 변형장: 출력 자리 uv 에서 읽을 원본 자리. 가중치(R 몸, G 머리, B 마우스)만큼 각 변환의 역을 섞는다.
+// 가중치가 연속이라 잘린 경계가 없다 (docs/MOTION_QA.md).
+fn deform_uv(uv: vec2<f32>) -> vec2<f32> {
+    let w = clamp(textureSampleLevel(tw, smp, uv, 0.0), vec4(0.0), vec4(1.0));
+    let pb = u.db.xy + (uv - u.db.xy - u.db.zw) / u.ds.xy;
+    let ph = u.dh.xy + (uv - u.dh.xy - u.dh.zw) / u.ds.zw;
+    return uv + w.r * (pb - uv) + w.g * (ph - uv) - w.b * u.dm.xy;
 }
 
 fn hash2(p: vec2<f32>) -> f32 {
@@ -68,12 +74,12 @@ fn vnoise(p: vec2<f32>) -> f32 {
 fn fs(v: VO) -> @location(0) vec4<f32> {
     let mode = u32(u.p.w + 0.5);
     var suv = v.uv;
-    if (mode == 4u) {
-        suv = v.uv - u.c.xy * warp_w(v.uv);
+    if (u.k.z > 0.5) {
+        suv = deform_uv(v.uv);
     }
     let a = textureSample(ta, smp, suv);
     let b = textureSample(tb, smp, suv);
-    let m = textureSample(tm, smp, v.uv).r * u.p.y;
+    let m = textureSample(tm, smp, suv).r * u.p.y;
     if (mode == 1u) {
         let x = clamp(distance(v.uv, u.g.xy) / u.g.z, 0.0, 1.0);
         let k = (1.0 - x * x);
@@ -251,7 +257,7 @@ pub struct Renderer {
     dummy: Tex,
     white: Tex,
     tex_size: u32,
-    bind_cache: HashMap<(String, String, String), wgpu::BindGroup>,
+    bind_cache: HashMap<(String, String, String, String), wgpu::BindGroup>,
     canvas: u32,
     /// 키 말풍선: (키 이름, 높이 px) -> (가로/세로 비율, 텍스처 바인드). 없으면(그리기 실패) None.
     clouds: HashMap<(&'static str, u32), Option<(f32, wgpu::BindGroup)>>,
@@ -295,7 +301,7 @@ impl Renderer {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
-                    min_binding_size: wgpu::BufferSize::new(80),
+                    min_binding_size: wgpu::BufferSize::new(144),
                 },
                 count: None,
             }],
@@ -316,6 +322,7 @@ impl Renderer {
                 tex_entry(0),
                 tex_entry(1),
                 tex_entry(3),
+                tex_entry(4),
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -379,7 +386,7 @@ impl Renderer {
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &uni_buf,
                     offset: 0,
-                    size: wgpu::BufferSize::new(80),
+                    size: wgpu::BufferSize::new(144),
                 }),
             }],
         });
@@ -480,14 +487,15 @@ impl Renderer {
         log::info!("텍스처 {}장을 {size_px}px 로 준비 ({:?})", self.tex.len(), t0.elapsed());
     }
 
-    fn bind(&mut self, a: &str, b: &str, m: &str) -> Option<wgpu::BindGroup> {
-        let key = (a.to_string(), b.to_string(), m.to_string());
+    fn bind(&mut self, a: &str, b: &str, m: &str, w: &str) -> Option<wgpu::BindGroup> {
+        let key = (a.to_string(), b.to_string(), m.to_string(), w.to_string());
         if let Some(bg) = self.bind_cache.get(&key) {
             return Some(bg.clone());
         }
         let va = if a.is_empty() { &self.dummy.view } else { &self.tex.get(a)?.view };
         let vb = if b.is_empty() { &self.dummy.view } else { &self.tex.get(b)?.view };
         let vm = if m.is_empty() { &self.white.view } else { &self.tex.get(m)?.view };
+        let vw = if w.is_empty() { &self.dummy.view } else { &self.tex.get(w)?.view };
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.bgl_tex,
@@ -496,6 +504,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(vb) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(vm) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(vw) },
             ],
         });
         self.bind_cache.insert(key, bg.clone());
@@ -525,6 +534,7 @@ impl Renderer {
                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&t.view) },
                     wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                     wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.white.view) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.dummy.view) },
                 ],
             });
             (img.w as f32 / img.h as f32, bg)
@@ -544,36 +554,44 @@ impl Renderer {
     /// 캐릭터(`frame`)와 키 말풍선을 그린다. `layout` 이 있으면 캐릭터는 아래쪽 정사각형에, 말풍선은 창 전체 기준.
     pub fn draw_scene(&mut self, frame: &Frame, keys: &[crate::keyecho::Sprite], layout: Option<Layout>, target: &wgpu::TextureView) {
         let c = self.canvas as f32;
-        let mut unis: Vec<[f32; 20]> = Vec::new();
+        let mut unis: Vec<[f32; 36]> = Vec::new();
         // (파이프라인, 바인드, 창 전체에 그리기)
         let mut binds: Vec<(u8, wgpu::BindGroup, bool)> = Vec::new();
         for cmd in &frame.cmds {
             let (a, b, t, mode, g) = match &cmd.kind {
-                DrawKind::Layer { name } if cmd.warp.is_some() => {
-                    let w = cmd.warp.as_ref().map(|w| [w.root[0] / c, w.root[1] / c, w.tip[0] / c, w.tip[1] / c]).unwrap_or_default();
-                    (name.as_str(), name.as_str(), 0.0, 4.0, w)
-                }
                 DrawKind::Layer { name } => (name.as_str(), name.as_str(), 0.0, 0.0, [0.0; 4]),
                 DrawKind::Mix { a, b, t } => (a.as_str(), b.as_str(), *t, 0.0, [0.0; 4]),
                 DrawKind::Glow { center, radius, .. } => ("", "", 0.0, 1.0, [center[0] / c, center[1] / c, radius / c, 0.0]),
             };
             let m = cmd.mask.as_deref().unwrap_or("");
-            let Some(bg) = self.bind(a, b, m) else {
+            let wf = cmd.deform.as_ref().map_or("", |d| d.field.as_str());
+            let Some(bg) = self.bind(a, b, m, wf) else {
                 log::warn!("텍스처 없음: {a} / {b} / {m}");
                 continue;
             };
-            let col = match (&cmd.kind, &cmd.warp) {
-                (DrawKind::Glow { color, .. }, _) => [color[0] * color[3], color[1] * color[3], color[2] * color[3], color[3]],
-                (_, Some(w)) => [w.d[0] / c, w.d[1] / c, w.radius[0] / c, w.radius[1] / c],
+            let col = match &cmd.kind {
+                DrawKind::Glow { color, .. } => [color[0] * color[3], color[1] * color[3], color[2] * color[3], color[3]],
                 _ => [0.0; 4],
             };
+            let dv: [f32; 16] = match &cmd.deform {
+                Some(d) => [
+                    d.body.anchor[0] / c, d.body.anchor[1] / c, d.body.offset[0] / c, d.body.offset[1] / c,
+                    d.body.s[0], d.body.s[1], d.head.s[0], d.head.s[1],
+                    d.head.anchor[0] / c, d.head.anchor[1] / c, d.head.offset[0] / c, d.head.offset[1] / c,
+                    d.mouse[0] / c, d.mouse[1] / c, 0.0, 0.0,
+                ],
+                None => [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            };
+            let on = if cmd.deform.is_some() { 1.0 } else { 0.0 };
             let u = |mode: f32| {
                 [
                     cmd.anchor[0] / c, cmd.anchor[1] / c, cmd.offset[0] / c, cmd.offset[1] / c,
                     cmd.scale, cmd.opacity, t, mode,
                     g[0], g[1], g[2], g[3],
                     col[0], col[1], col[2], col[3],
-                    cmd.squash[0], cmd.squash[1], 0.0, 0.0,
+                    cmd.squash[0], cmd.squash[1], on, 0.0,
+                    dv[0], dv[1], dv[2], dv[3], dv[4], dv[5], dv[6], dv[7],
+                    dv[8], dv[9], dv[10], dv[11], dv[12], dv[13], dv[14], dv[15],
                 ]
             };
             if !m.is_empty() && mode == 0.0 {
@@ -603,6 +621,8 @@ impl Renderer {
                     k.dissolve, k.seed, aspect, 0.0,
                     0.0, 0.0, 0.0, 0.0,
                     kx, ky, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 ]);
                 binds.push((0, bg, true));
             }

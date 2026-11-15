@@ -205,7 +205,7 @@
         {
           "target": "body",
           "kind": "squash",
-          "squash": 0.06,
+          "squash": 0.04,
           "period_ms": 350,
           "count": 1
         }

@@ -11,6 +11,10 @@ use crate::config::{Anim, Behavior, Breathe, Desk, FxKind, LayerMode, Manifest, 
 use crate::desk::{Catalog, Prop};
 use crate::pet::{Cue, Head, PawL, PawR, PetEvent, PetState, Pose};
 
+/// 움직임 진폭(pt)의 기준 창 크기. 창 크기와 상관없이 캐릭터에 대한 비율이 같도록 앱도 이 값으로 애니메이터를 만든다
+/// (작은 창에서 움직임이 상대적으로 커져 변형장이 접히지 않게, docs/MOTION_QA.md).
+pub const REF_SIZE_PT: f32 = 240.0;
+
 // ---------- 이징 ----------
 
 pub fn ease_in_out(t: f32) -> f32 {
@@ -72,18 +76,34 @@ pub struct DrawCmd {
     /// 영역 마스크 레이어. 있으면 마스크 안을 이 레이어로 교체, 없으면 일반 over 합성.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask: Option<String>,
-    /// 휘게 그리기 (마우스 연출). 마스크와 같이 쓰지 않는다.
+    /// 변형장으로 밀어 그리기 (몸/머리/마우스 움직임). 레이어와 마스크를 같은 자리에서 읽으므로
+    /// 여러 레이어를 같은 값으로 그리면 합성된 그림 전체를 미는 것과 같다 (이음매 없음).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub warp: Option<Warp>,
+    pub deform: Option<Deform>,
 }
 
-/// root 에서 tip 으로 갈수록, 축에 가까울수록 `d` 만큼 밀어서 그린다 (캔버스 px).
+/// 변환 하나 (`p -> anchor + (p - anchor) * s + offset`, 캔버스 px).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct Warp {
-    pub root: [f32; 2],
-    pub tip: [f32; 2],
-    pub radius: [f32; 2],
-    pub d: [f32; 2],
+pub struct Affine {
+    pub anchor: [f32; 2],
+    pub offset: [f32; 2],
+    pub s: [f32; 2],
+}
+
+impl From<Xf> for Affine {
+    fn from(x: Xf) -> Self {
+        Self { anchor: x.anchor, offset: x.offset, s: x.s }
+    }
+}
+
+/// 변형장 `field` (R 몸, G 머리, B 마우스 가중치) 로 각 변환을 가중치만큼 섞어 민다 (docs/MOTION_QA.md).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Deform {
+    pub field: String,
+    pub body: Affine,
+    pub head: Affine,
+    /// 손과 마우스 이동 (캔버스 px).
+    pub mouse: [f32; 2],
 }
 
 fn unit2() -> [f32; 2] {
@@ -104,7 +124,7 @@ impl DrawCmd {
             squash: [1.0; 2],
             anchor: [0.0; 2],
             mask: None,
-            warp: None,
+            deform: None,
         }
     }
     /// 이 명령이 쓰는 레이어 이름들.
@@ -116,6 +136,7 @@ impl DrawCmd {
         }
         .into_iter()
         .chain(self.mask.as_deref())
+        .chain(self.deform.as_ref().map(|d| d.field.as_str()))
         .collect()
     }
 }
@@ -484,8 +505,10 @@ pub struct Animator {
     masks: BTreeMap<String, String>,
     head_anchor: [f32; 2],
     body_anchor: [f32; 2],
-    /// 마우스 연출 축. 레이어(paw_r/mouse_bg, fx/mouse_arm)가 없으면 None.
+    /// 마우스 연출 (최대 변위). 변형장이 없으면 None.
     swing: Option<Swing>,
+    /// 변형장 레이어 (mask/warp). 있으면 몸/머리/마우스 움직임을 이음매 없이 변형으로 그린다.
+    field: Option<String>,
     /// 캔버스 px / 표시 pt.
     px_per_pt: f32,
     pub breathing: bool,
@@ -540,7 +563,8 @@ impl Animator {
             masks: m.masks.iter().filter(|(_, v)| m.layers.contains(v)).map(|(k, v)| (k.clone(), v.clone())).collect(),
             head_anchor: ha,
             body_anchor: m.body_anchor.unwrap_or([ha[0], ha[1] + m.canvas as f32 * 0.25]),
-            swing: m.swing.clone().filter(|_| ["paw_r/mouse_bg", "fx/mouse_arm"].iter().all(|l| m.layers.iter().any(|x| x == l))),
+            swing: m.swing.clone().filter(|_| m.masks.get("warp").is_some_and(|w| m.layers.contains(w))),
+            field: m.masks.get("warp").filter(|w| m.layers.contains(w)).cloned(),
             px_per_pt: m.canvas as f32 / size_pt,
             breathing: false,
             cue_behaviors: true,
@@ -904,7 +928,27 @@ impl Animator {
     }
 
     fn swing_active(&self, now: Instant) -> bool {
-        self.swing.is_some() && self.state.paw_r == PawR::Mouse && self.swing_env(now) > 0.0
+        self.swing.is_some() && matches!(self.state.paw_r, PawR::Mouse | PawR::MouseClick) && self.swing_env(now) > 0.0
+    }
+
+    /// 손과 마우스 이동 (캔버스 px). 패드 테두리가 접히지 않게 변형장이 허락한 최대 변위의 90% 안으로.
+    fn mouse_offset(&self, now: Instant) -> [f32; 2] {
+        let Some(sw) = self.swing.as_ref().filter(|_| self.swing_active(now)) else { return [0.0; 2] };
+        let a = &self.a;
+        let e = self.swing_env(now);
+        let t = self.swing_start.map_or(0.0, |s| now.saturating_duration_since(s).as_secs_f32());
+        let ph = t * a.swing_hz * std::f32::consts::TAU;
+        let amp = |k: usize| (a.swing_pt[k] * self.px_per_pt).min(sw.max_px[k] * 0.9);
+        [ph.sin() * amp(0) * e, (2.0 * ph).sin() * amp(1) * e]
+    }
+
+    /// 변형 그리기 값. 변형장이 없거나 움직임이 없으면 None (그냥 그린다).
+    fn deform(&self, body: &Xf, head: &Xf, mouse: [f32; 2]) -> Option<Deform> {
+        let field = self.field.clone()?;
+        if body.is_identity() && head.is_identity() && mouse == [0.0; 2] {
+            return None;
+        }
+        Some(Deform { field, body: (*body).into(), head: (*head).into(), mouse })
     }
 
     fn add_glow(&mut self, pose_layer: &str, now: Instant) {
@@ -916,7 +960,7 @@ impl Animator {
     /// 몸 전체 움직임. base_clean(캐릭터를 지운 책상) 이 없으면 드러나는 자리가 어색하지 않게 2pt 안으로.
     fn body_xf(&self, motion: &[Motion], fx: &[SceneFx], lt: f32, len: Option<f32>) -> Xf {
         let x = motion_xf(motion, fx, MotionTarget::Body, lt, len, self.body_anchor, self.px_per_pt);
-        if self.layers.has("base_clean") { x } else { x.clamp_offset(2.0 * self.px_per_pt) }
+        if self.field.is_some() || self.layers.has("base_clean") { x } else { x.clamp_offset(2.0 * self.px_per_pt) }
     }
 
     /// 몸을 움직여 그린다: 제자리에 `rest`, 캐릭터를 지운 책상(있으면), 몸 마스크 안을 옮겨서 `kind`.
@@ -981,36 +1025,12 @@ impl Animator {
             let head_m = ov.map_or(Xf::identity(self.head_anchor), |(_, b, lt, len)| {
                 motion_xf(&b.motion, &b.fx, MotionTarget::Head, lt, len, self.head_anchor, pt)
             });
-            cmds.extend(self.body_cmds(DrawCmd::layer("base"), DrawKind::Layer { name: "base".into() }, &body));
-            // 앞발. 책상이 같이 움직이지 않도록 앞발 레이어는 제자리에 그린다 (몸이 움직이면 팔 부분만 따라감)
-            if let Some(l) = self.layers.resolve(st.paw_l.layer()) {
-                cmds.extend(self.paw_cmds(&l, "paw_l", &body));
-            }
-            match (&self.swing, st.paw_r) {
-                (Some(sw), PawR::Mouse) => {
-                    // 팔을 치운 바탕 위에 팔을 휘게 그린다 (멈춰 있으면 d = 0 이라 원래 그림과 같다)
-                    let mut bg = DrawCmd::layer("paw_r/mouse_bg");
-                    bg.mask = self.masks.get("paw_r").cloned();
-                    cmds.push(bg);
-                    let e = self.swing_env(now);
-                    let t = self.swing_start.map_or(0.0, |s| now.saturating_duration_since(s).as_secs_f32());
-                    let ph = t * a.swing_hz * std::f32::consts::TAU;
-                    let d = [ph.sin() * a.swing_pt[0] * pt * e, (2.0 * ph).sin() * a.swing_pt[1] * pt * e];
-                    let mut arm = DrawCmd::layer("fx/mouse_arm");
-                    arm.warp = Some(Warp { root: sw.root, tip: sw.tip, radius: sw.radius, d });
-                    cmds.push(arm);
-                }
-                _ => {
-                    if let Some(l) = self.layers.resolve(st.paw_r.layer()) {
-                        cmds.extend(self.paw_cmds(&l, "paw_r", &body));
-                    }
-                }
-            }
             // 키 빛
+            let mut glows = Vec::new();
             for g in &self.glows {
                 let p = ease_out(progress(now, g.start, a.glow_ms));
                 let r = (a.glow_r0_pt + (a.glow_r1_pt - a.glow_r0_pt) * p) * pt;
-                cmds.push(DrawCmd {
+                glows.push(DrawCmd {
                     kind: DrawKind::Glow { center: g.center, radius: r, color: a.glow_color },
                     opacity: 1.0 - p,
                     anchor: g.center,
@@ -1031,6 +1051,10 @@ impl Animator {
             } else {
                 0.0
             };
+            // 머리 변환: behavior 머리 움직임 + 숨쉬기 + 팝 (변형장에서는 머리 가중치만큼)
+            let pop = Xf { anchor: self.head_anchor, offset: [0.0, breathe], s: [scale; 2] };
+            let head_total = head_m.then_of(&pop);
+            let def = self.deform(&body, &head_total, self.mouse_offset(now));
             let mut head_cur = self.layers.resolve(self.head_layer(st.head, now));
             // 머리 바꾸기: 시작/끝 head_fade_ms 동안 원래 머리와 섞는다
             let mut swap: Option<(String, f32)> = None;
@@ -1073,17 +1097,50 @@ impl Animator {
                 head_cur.map(|name| DrawKind::Layer { name })
             };
             let head_xf = body.then_of(&head_m);
-            if let Some(kind) = head_kind {
-                let mask = self.masks.get("head").cloned();
-                let mut c = DrawCmd { kind, offset: [0.0, breathe], scale, anchor: self.head_anchor, mask, ..DrawCmd::layer("") };
-                head_xf.apply(&mut c);
-                cmds.push(c);
-            }
-            if let Some(mut f) = fx {
-                f.offset[1] += breathe;
-                f.scale = scale;
-                head_xf.apply(&mut f);
-                cmds.push(f);
+            if let Some(def) = &def {
+                // 변형장: 바탕/앞발/머리를 같은 변형으로 그린다 (몸/머리 움직임과 마우스가 이음매 없이)
+                let paw_l = self.layers.resolve(st.paw_l.layer());
+                let paw_r = self.layers.resolve(st.paw_r.layer());
+                let mut char_cmds = vec![DrawCmd::layer("base")];
+                for (l, g) in [(paw_l, "paw_l"), (paw_r, "paw_r")] {
+                    if let Some(l) = l {
+                        char_cmds.push(DrawCmd { mask: self.masks.get(g).cloned(), ..DrawCmd::layer(&l) });
+                    }
+                }
+                if let Some(kind) = head_kind {
+                    char_cmds.push(DrawCmd { kind, mask: self.masks.get("head").cloned(), ..DrawCmd::layer("") });
+                }
+                for mut c in char_cmds {
+                    c.deform = Some(def.clone());
+                    cmds.push(c);
+                }
+                cmds.extend(glows);
+                if let Some(mut f) = fx {
+                    body.then_of(&head_total).apply(&mut f);
+                    cmds.push(f);
+                }
+            } else {
+                cmds.extend(self.body_cmds(DrawCmd::layer("base"), DrawKind::Layer { name: "base".into() }, &body));
+                // 앞발. 책상이 같이 움직이지 않도록 앞발 레이어는 제자리에 그린다 (몸이 움직이면 팔 부분만 따라감)
+                if let Some(l) = self.layers.resolve(st.paw_l.layer()) {
+                    cmds.extend(self.paw_cmds(&l, "paw_l", &body));
+                }
+                if let Some(l) = self.layers.resolve(st.paw_r.layer()) {
+                    cmds.extend(self.paw_cmds(&l, "paw_r", &body));
+                }
+                cmds.extend(glows);
+                if let Some(kind) = head_kind {
+                    let mask = self.masks.get("head").cloned();
+                    let mut c = DrawCmd { kind, offset: [0.0, breathe], scale, anchor: self.head_anchor, mask, ..DrawCmd::layer("") };
+                    head_xf.apply(&mut c);
+                    cmds.push(c);
+                }
+                if let Some(mut f) = fx {
+                    f.offset[1] += breathe;
+                    f.scale = scale;
+                    head_xf.apply(&mut f);
+                    cmds.push(f);
+                }
             }
             cmds.extend(self.prop_cmds(None, 1.0, now));
             if let Some((_, b, lt, len)) = ov {
@@ -1124,6 +1181,17 @@ impl Animator {
         let motion: &[Motion] = self.behavior(r).map_or(&[], |b| &b.motion);
         let kind = f.kind(el);
         let body = self.body_xf(motion, &f.fx, lt, len);
+        let s = f.breath(el);
+        let bob = f.breathe.as_ref().map_or(0.0, |b| -s * b.pt * pt);
+        if self.field.is_some() {
+            let mut head = motion_xf(motion, &f.fx, MotionTarget::Head, lt, len, self.head_anchor, pt);
+            head.offset[1] += bob;
+            let mut c = DrawCmd { kind: kind.clone(), opacity: alpha, ..DrawCmd::layer("") };
+            c.deform = self.deform(&body, &head, [0.0; 2]);
+            let mut v = vec![c];
+            v.extend(self.behavior_fx(motion, &f.fx, lt, len, |x| f.on_weight(&x.on, el), bob, alpha));
+            return v;
+        }
         let mut v = self.body_cmds(DrawCmd { kind: kind.clone(), opacity: alpha, ..DrawCmd::layer("") }, kind.clone(), &body);
         let s = f.breath(el);
         let bob = f.breathe.as_ref().map_or(0.0, |b| -s * b.pt * pt);
