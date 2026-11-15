@@ -162,6 +162,8 @@ on = ["full/sleep_a"]
 
 소품 레이어는 picks.json 의 `"_fx": {"<이름>": {"src": "<소품이 있는 후보>", "ref": "<소품만 없는 후보>"}}` 로 정하면
 build.sh 의 `art/scripts/extract_fx.py` 가 두 그림의 차이만 잘라 `fx/<이름>` 으로 만든다 (경계 상자를 찍어 주니 anchor 를 잡을 때 참고).
+선택 키: `"thr"` (이 소품만 쓸 차이 기준, 기본 60), `"box": [x0, y0, x1, y1]` (이 상자 밖은 버림),
+`"key": "white"` (ref 없이 피부 위의 옅은 흰 김만 색으로 골라냄. 차이가 작아 안 잡히거나 옆의 컵 어긋남이 같이 잡힐 때. 랏코 `steam`).
 장면 움직임은 `typing-pet --render-timeline <폴더> --scenario idle --secs 42 --start 19` (milestone 은 `--scenario milestone --secs 15 --start 11`)로 프레임을 뽑아 확인한다.
 
 | 캐릭터 | idle | milestone | gesture (과열이 식을 때) |

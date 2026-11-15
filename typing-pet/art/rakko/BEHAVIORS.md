@@ -67,25 +67,23 @@
   매듭 자리에 흰(크림색) 리본 나비매듭 (e54) 이 있다. 글자, 무늬, 얼굴 없음.
 - 반응: 이 소품을 누르면 `rakko_thanks` ("흠. 감사." 말풍선 + 끄덕임).
 
-## 지금 상태와 남은 일 (2026-11-13)
+## 지금 상태 (2026-11-14 끝남)
 
-2026-11-13 에 `stopgap/regen.sh` 로 앞발/base_clean/머리/장면 첫 프레임까지 생성하고 picks.json 에 넣었다.
-`scene_cocoa_a` 부터 codex 사용량 한도에 다시 걸렸다 ("try again at Nov 14th, 2026 1:23 AM").
-설치본은 아직 `characters/_wip_rakko` (메뉴에 안 보임).
+모든 그림이 생성본이다. PIL 임시 그림(`raw/*_pil.png`, `stopgap/make.py`)은 더 쓰지 않는다. 설치본은 `characters/rakko`, 기준 이미지 `characters/rakko/baseline`.
 
-| 항목 | 지금 | 남은 일 |
+| 항목 | 쓰는 그림 | 메모 |
 |---|---|---|
-| 앞발 누름/center/mouse/click | 생성본 (left_down_1, right_down_1, right_center_1, mouse_1, mouse_click_1) | 없음 |
-| base_clean | 생성본 base_clean_1 | 없음 |
-| 머리 | head/excited = head_excited_1 (e52@0:05), head/overheat = head_overheat_1 (e53@0:16, 덜 찌푸린 쪽). `rakko_joa`/`rakko_focus` 에 연결 | 없음 |
-| idle `rakko_order` | overlay "늘 먹던 걸로!" PIL 말풍선 + 끄덕임 | 고른 첫 프레임 `scene_parfait_a_1` 에서 `41_scene_parfait_b` 생성, full `rakko_parfait` 로 바꾸기 |
-| milestone `rakko_slash` | overlay PIL 베기 빛줄기 | 고른 첫 프레임 `scene_slash_a_1` 에서 `43_scene_slash_b` 생성, full 로 바꾸기 |
-| gesture `rakko_puff` | overlay PIL 입김 + squash | `44_scene_cocoa_a` 생성 (실패한 곳), 그 다음 `45_scene_cocoa_b`, `67_behavior_steam`, full `rakko_cocoa` 로 바꾸기 |
-| ambient `rakko_nod` | 머리 끄덕임 | `66_behavior_dream` 생성, `rakko_dream` 으로 바꾸기 |
-| 말풍선/번개 | PIL (`*_pil`) | `60_`~`63_`, `65_` 생성 후 picks `_fx` 의 src 교체 |
-| `rakko_focus` 의 "흠..." 말풍선 | 뺐다 (생성 프롬프트가 없고 표대로 head/overheat + nod) | 없음 |
+| 앞발 누름/center/mouse/click, base_clean | left_down_1, right_down_1, right_center_1, mouse_1, mouse_click_1, base_clean_1 | |
+| 머리 | head/excited = head_excited_1 (e52@0:05), head/overheat = head_overheat_1 (e53@0:16) | `rakko_joa`/`rakko_focus` |
+| idle `rakko_parfait` | scene_parfait_a_1 -> scene_parfait_b_openeyes, 크로스페이드 + 숨쉬기 + fx/order | 둘째 프레임 후보가 둘 다 ^^ 로 눈을 감아서 (e54@0:53 은 뜬 눈) parfait_b_1 에 a_1 의 눈을 옮겨 붙이고, 뺨 옆 ( ) 자국과 배경의 움직임 선을 지웠다 |
+| milestone `rakko_slash` | scene_slash_a_1 -> scene_slash_b_openeyes, 2장 교대 + hop | slash_b 후보가 눈을 감아서 (근거 없음) slash_b_2 에 a_1 의 굳은 눈을 옮겨 붙였다 |
+| gesture `rakko_cocoa` | scene_cocoa_a_1 -> scene_cocoa_b_1, 2장 교대 + fx/steam float | cocoa_b_1 은 e115@0:40 처럼 동그란 눈 + 코 홍조 |
+| ambient `rakko_dream` | fx/dream = behavior_dream_2 + 머리 nod | |
+| 말풍선/번개 | behavior_{order,joa,hurry,thanks}_bubble_1, behavior_bolt_2 | 말풍선 anchor 는 꼬리 끝 |
+| 김 | behavior_steam_1, `"key": "white"` + `box` 로 추출 | 차이 비교로는 옅은 김 대신 컵 어긋남이 잡혀서 extract_fx 에 흰 김 색 키를 추가했다 |
 
-머리 마스크는 `art/scripts/silhouette_head.py --name rakko` 로 몸 전체 실루엣까지 넓혔다. `build.sh --remask` 를 하면 다시 돌려야 한다.
+- 머리 마스크는 `art/scripts/silhouette_head.py --name rakko` 로 몸 전체 실루엣까지 넓혔다. `build.sh --remask` 를 하면 다시 돌려야 한다.
+- `--scenario wake` 는 16초만 쉬어서 랏코(`wake_after_s` 20)는 `rakko_bolt` 가 안 나온다. 성격 타이밍대로다.
 
 ## 확인
 

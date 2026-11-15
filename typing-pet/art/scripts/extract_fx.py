@@ -2,6 +2,8 @@
 
 picks.json 의 "_fx" 항목: {"<이름>": {"src": "<소품이 있는 raw>", "ref": "<소품만 없는 raw>"}}
 두 그림을 크로마키로 배경을 빼고 base 에 맞춘 뒤, src 에서 ref 와 달라진 덩어리만 남긴다.
+선택 키: "thr" (이 소품만 쓸 차이 기준), "box": [x0, y0, x1, y1] (base 좌표, 이 상자 밖은 버림),
+"key": "white" (ref 와 비교하지 않고 피부 위의 옅은 흰 김만 색으로 골라냄. box 와 같이 쓴다).
 slice.py 가 work/fx/*.png 를 fx/<이름> 레이어로 그대로 내보낸다.
 소품 위치(anchor 를 잡을 때 참고)로 각 소품의 경계 상자를 출력한다.
 
@@ -61,6 +63,14 @@ def extract(src: np.ndarray, ref: np.ndarray, thr: float, shift: int = 4) -> np.
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
+def white_key(src: np.ndarray) -> np.ndarray:
+    """흰 김처럼 피부 위에 옅게 그린 소품: 파랑이 빨강 이상인 밝은 픽셀만 남긴다 (피부/입은 빨강이 더 커서 빠진다)."""
+    out = src.copy()
+    a = np.clip((src[..., 2] - src[..., 0] + 15) / 25, 0, 1) * (src[..., :3].mean(-1) > 150)
+    out[..., 3] = src[..., 3] * a
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--name", default="usagi")
@@ -81,8 +91,16 @@ def main() -> None:
             tmp = Path(t) / name
             tmp.mkdir()
             src = prep(art / "raw" / f"{spec['src']}.png", base, tmp)
-            ref = prep(art / "raw" / f"{spec['ref']}.png", base, tmp)
-            rgba = extract(src, ref, a.thr)
+            if spec.get("key") == "white":
+                rgba = white_key(src)
+            else:
+                ref = prep(art / "raw" / f"{spec['ref']}.png", base, tmp)
+                rgba = extract(src, ref, spec.get("thr", a.thr))
+            if "box" in spec:
+                x0, y0, x1, y1 = spec["box"]
+                keep = np.zeros(rgba.shape[:2], bool)
+                keep[y0:y1, x0:x1] = True
+                rgba[..., 3][~keep] = 0
             Image.fromarray(rgba, "RGBA").save(out_dir / f"{name}.png")
             ys, xs = np.nonzero(rgba[..., 3] > 128)
             box = [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())] if len(xs) else None

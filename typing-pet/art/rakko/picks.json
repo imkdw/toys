@@ -1,68 +1,85 @@
 {
-  "_comment": "레이어 이름 -> art/rakko/raw 의 생성 파일 (확장자 제외). *_pil 은 생성 한도 때문에 stopgap/make.py 로 만든 임시 레이어 (말풍선/번개/베기/입김). 남은 생성은 stopgap/regen.sh.",
+  "_comment": "레이어 이름 -> art/rakko/raw 의 생성 파일 (확장자 제외). scene_parfait_b_openeyes/scene_slash_b_openeyes 는 둘째 프레임이 눈을 감아 나와서 첫 프레임의 눈을 옮겨 붙인 그림.",
   "_title": "랏코",
   "base": "base_final",
   "paw_l/down": "left_down_1",
   "paw_r/down": "right_down_1",
   "base_clean": "base_clean_1",
+  "full/rakko_parfait_a": "scene_parfait_a_1",
+  "full/rakko_parfait_b": "scene_parfait_b_openeyes",
+  "full/rakko_slash_a": "scene_slash_a_1",
+  "full/rakko_slash_b": "scene_slash_b_openeyes",
+  "full/rakko_cocoa_a": "scene_cocoa_a_1",
+  "full/rakko_cocoa_b": "scene_cocoa_b_1",
   "_expressions": {
     "head/excited": "e52@0:05 입 벌린 웃음 (한쪽 눈썹 살짝 찡긋, 혀 보이는 웃는 입)",
     "head/overheat": "e53@0:16 굳은 짧은 눈썹의 진지한 얼굴 (화난 얼굴 아님)"
   },
   "_fx": {
     "order": {
-      "src": "behavior_order_bubble_pil",
+      "src": "behavior_order_bubble_1",
       "ref": "base_final"
     },
     "joa": {
-      "src": "behavior_joa_bubble_pil",
+      "src": "behavior_joa_bubble_1",
       "ref": "base_final"
     },
     "hurry": {
-      "src": "behavior_hurry_bubble_pil",
+      "src": "behavior_hurry_bubble_1",
       "ref": "base_final"
     },
     "thanks": {
-      "src": "behavior_thanks_bubble_pil",
+      "src": "behavior_thanks_bubble_1",
       "ref": "base_final"
     },
     "bolt": {
-      "src": "behavior_bolt_pil",
+      "src": "behavior_bolt_2",
       "ref": "base_final"
     },
-    "slash": {
-      "src": "behavior_slash_pil",
+    "dream": {
+      "src": "behavior_dream_2",
       "ref": "base_final"
     },
-    "puff": {
-      "src": "behavior_puff_pil",
-      "ref": "base_final"
+    "steam": {
+      "src": "behavior_steam_1",
+      "key": "white",
+      "box": [
+        455,
+        495,
+        575,
+        566
+      ]
     }
   },
   "_behaviors": {
-    "rakko_order": {
+    "rakko_parfait": {
       "on": "idle",
-      "layer_mode": "overlay",
-      "duration_ms": 6000,
-      "motion": [
+      "layer_mode": "full",
+      "step": [
         {
-          "target": "head",
-          "kind": "nod",
-          "pt": 2.0,
-          "period_ms": 900,
-          "count": 2,
-          "delay_ms": 1400
+          "frame": "full/rakko_parfait_a",
+          "ms": 2600,
+          "blend_ms": 200
+        },
+        {
+          "frame": "full/rakko_parfait_b",
+          "ms": 3000,
+          "blend_ms": 200
         }
       ],
+      "breathe": {
+        "period_ms": 3400,
+        "pt": 1.2
+      },
       "fx": [
         {
           "layer": "fx/order",
           "kind": "pop_in",
           "anchor": [
-            780,
-            300
+            728,
+            294
           ],
-          "period_ms": 2600,
+          "period_ms": 2400,
           "scale": [
             0.3,
             1.0
@@ -72,44 +89,34 @@
     },
     "rakko_slash": {
       "on": "milestone",
-      "layer_mode": "overlay",
-      "duration_ms": 1600,
-      "fx": [
-        {
-          "layer": "fx/slash",
-          "kind": "flash",
-          "anchor": [
-            525,
-            325
-          ],
-          "period_ms": 700,
-          "delay_ms": 250
-        }
-      ]
-    },
-    "rakko_puff": {
-      "on": "gesture",
-      "layer_mode": "overlay",
-      "duration_ms": 2400,
+      "layer_mode": "full",
+      "frame_ms": 500,
       "motion": [
         {
           "target": "body",
-          "kind": "squash",
-          "squash": 0.04,
-          "period_ms": 1200,
-          "count": 1
+          "kind": "hop",
+          "pt": 2,
+          "period_ms": 500,
+          "count": 1,
+          "delay_ms": 500,
+          "squash": 0.03
         }
-      ],
+      ]
+    },
+    "rakko_cocoa": {
+      "on": "gesture",
+      "layer_mode": "full",
+      "frame_ms": 900,
       "fx": [
         {
-          "layer": "fx/puff",
+          "layer": "fx/steam",
           "kind": "float",
           "anchor": [
-            512,
-            520
+            514,
+            545
           ],
-          "period_ms": 2000,
-          "rise_pt": 10
+          "period_ms": 1800,
+          "rise_pt": 12
         }
       ]
     },
@@ -122,8 +129,8 @@
           "layer": "fx/bolt",
           "kind": "flash",
           "anchor": [
-            860,
-            290
+            868,
+            299
           ],
           "period_ms": 600
         }
@@ -138,8 +145,8 @@
           "layer": "fx/joa",
           "kind": "pop_in",
           "anchor": [
-            780,
-            300
+            730,
+            270
           ],
           "period_ms": 1500,
           "scale": [
@@ -188,8 +195,8 @@
           "layer": "fx/hurry",
           "kind": "pop_in",
           "anchor": [
-            780,
-            300
+            725,
+            276
           ],
           "period_ms": 1300,
           "scale": [
@@ -199,16 +206,29 @@
         }
       ]
     },
-    "rakko_nod": {
+    "rakko_dream": {
       "on": "ambient",
-      "duration_ms": 1600,
+      "duration_ms": 3000,
       "motion": [
         {
           "target": "head",
           "kind": "nod",
           "pt": 2.0,
-          "period_ms": 700,
-          "count": 2
+          "period_ms": 900,
+          "count": 2,
+          "delay_ms": 300
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/dream",
+          "kind": "float",
+          "anchor": [
+            176,
+            188
+          ],
+          "period_ms": 2400,
+          "rise_pt": 8
         }
       ]
     },
@@ -230,8 +250,8 @@
           "layer": "fx/thanks",
           "kind": "pop_in",
           "anchor": [
-            780,
-            300
+            765,
+            288
           ],
           "period_ms": 1400,
           "scale": [
