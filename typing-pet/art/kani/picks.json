@@ -1,0 +1,226 @@
+{
+  "_comment": "레이어 이름 -> art/kani/raw 의 생성 파일 (확장자 제외). 예정본: 생성 뒤 고른 후보 번호로 바꾸고 picks.json 으로 복사. fx anchor 는 어림값이라 extract_fx 경계 상자로 고친다. 근거는 BEHAVIORS.md",
+  "_title": "카니",
+  "base": "base_final",
+  "paw_l/down": "left_down_1",
+  "paw_r/down": "right_down_1",
+  "paw_r/mouse": "mouse_short_1",
+  "paw_r/mouse_click": "mouse_click_short_1",
+  "head/excited": "head_excited_1",
+  "head/joy": "head_joy_1",
+  "full/kani_read_a": "scene_read_a_1",
+  "full/kani_read_b": "scene_read_b_1",
+  "base_clean": "base_clean_1",
+  "_desk": {
+    "item": "bookbox"
+  },
+  "_expressions": {
+    "head/excited": "pv2@0:53 눈을 크게 뜨고 입을 벌려 웃는 얼굴",
+    "head/joy": "c2@0:01 눈을 감고 웃으며 눈가에 눈물 한 방울"
+  },
+  "_fx": {
+    "kani_sparkle": {
+      "src": "behavior_sparkle_1",
+      "ref": "base_final"
+    },
+    "kani_sweat": {
+      "src": "behavior_sweat_1",
+      "ref": "base_final"
+    },
+    "kani_bookmark": {
+      "src": "behavior_bookmark_1",
+      "ref": "base_final"
+    }
+  },
+  "_pair": {
+    "full/kani_read_b": "full/kani_read_a"
+  },
+  "_behaviors": {
+    "kani_read": {
+      "on": "idle",
+      "layer_mode": "full",
+      "step": [
+        {
+          "frame": "full/kani_read_a",
+          "ms": 4200
+        },
+        {
+          "frame": "full/kani_read_b",
+          "ms": 1100
+        }
+      ],
+      "breathe": {
+        "period_ms": 3600,
+        "pt": 1.2
+      }
+    },
+    "kani_joy": {
+      "on": "milestone",
+      "duration_ms": 2600,
+      "head": {
+        "layer": "head/joy"
+      },
+      "motion": [
+        {
+          "target": "body",
+          "kind": "hop",
+          "pt": 2,
+          "period_ms": 450,
+          "count": 2,
+          "squash": 0.02
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/kani_sparkle",
+          "kind": "pulse",
+          "anchor": [
+            195,
+            228
+          ],
+          "period_ms": 800,
+          "scale": [
+            0.6,
+            1
+          ]
+        }
+      ]
+    },
+    "kani_phew": {
+      "on": "gesture",
+      "duration_ms": 2400,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "squash",
+          "squash": 0.015,
+          "period_ms": 800,
+          "count": 2
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/kani_sweat",
+          "kind": "fall",
+          "anchor": [
+            816,
+            216
+          ],
+          "period_ms": 900,
+          "rise_pt": 14
+        }
+      ]
+    },
+    "kani_wow": {
+      "on": "level:excited",
+      "duration_ms": 1400,
+      "cooldown_s": 15,
+      "head": {
+        "layer": "head/excited"
+      },
+      "motion": [
+        {
+          "target": "body",
+          "kind": "hop",
+          "pt": 1.6,
+          "period_ms": 420,
+          "count": 1,
+          "squash": 0.02
+        }
+      ]
+    },
+    "kani_resolve": {
+      "on": "level:overheat",
+      "duration_ms": 1800,
+      "cooldown_s": 12,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "tremble",
+          "pt": 1.6,
+          "period_ms": 100
+        },
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2,
+          "period_ms": 600,
+          "count": 1
+        }
+      ]
+    },
+    "kani_look": {
+      "on": "wake",
+      "duration_ms": 900,
+      "cooldown_s": 20,
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2,
+          "period_ms": 600,
+          "count": 1
+        }
+      ]
+    },
+    "kani_bookmark": {
+      "on": "ambient",
+      "duration_ms": 2400,
+      "cooldown_s": 60,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "sway",
+          "pt": 1.8,
+          "period_ms": 1200,
+          "count": 2
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/kani_bookmark",
+          "kind": "float",
+          "anchor": [
+            156,
+            258
+          ],
+          "period_ms": 1600,
+          "rise_pt": 10
+        }
+      ]
+    },
+    "kani_thanks": {
+      "on": "prop",
+      "duration_ms": 1200,
+      "cooldown_s": 3,
+      "head": {
+        "layer": "head/joy"
+      },
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2,
+          "period_ms": 500,
+          "count": 1
+        }
+      ]
+    }
+  },
+  "_timing": {
+    "level_up": [
+      14,
+      24,
+      34
+    ],
+    "paw_down_ms": 130,
+    "wake_after_s": 18,
+    "ambient_every_s": [
+      80,
+      200
+    ]
+  },
+  "_anim": {
+    "glow_ms": 240
+  }
+}

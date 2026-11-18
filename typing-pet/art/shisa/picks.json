@@ -1,0 +1,193 @@
+{
+  "_comment": "레이어 이름 -> art/shisa/raw 의 생성 파일 (확장자 제외). 예정본: 생성 뒤 고른 후보 번호로 바꾸고 picks.json 으로 복사. fx anchor 는 어림값이라 extract_fx 경계 상자로 고친다. 근거는 BEHAVIORS.md",
+  "_title": "시사",
+  "base": "base_final",
+  "paw_l/down": "left_down_1",
+  "paw_r/down": "right_down_1",
+  "paw_r/mouse": "mouse_short_1",
+  "paw_r/mouse_click": "mouse_click_short_1",
+  "head/excited": "head_excited_1",
+  "head/overheat": "head_overheat_1",
+  "full/shisa_study_a": "scene_study_a_1",
+  "full/shisa_study_b": "scene_study_b_1",
+  "full/shisa_pass_a": "scene_pass_a_1",
+  "full/shisa_pass_b": "scene_pass_b_1",
+  "full/shisa_ramen_a": "scene_ramen_a_1",
+  "full/shisa_ramen_b": "scene_ramen_b_1",
+  "base_clean": "base_clean_1",
+  "_desk": {
+    "item": "ramen"
+  },
+  "_expressions": {
+    "head/excited": "e246@0:12 눈을 감고 입을 크게 벌려 웃는 얼굴",
+    "head/overheat": "e251@0:45 공부하다 얼굴이 달아오르고 눈이 풀린 얼굴"
+  },
+  "_fx": {
+    "shisa_notes": {
+      "src": "behavior_notes_1",
+      "ref": "base_final"
+    }
+  },
+  "_pair": {
+    "full/shisa_study_b": "full/shisa_study_a",
+    "full/shisa_pass_b": "full/shisa_pass_a",
+    "full/shisa_ramen_b": "full/shisa_ramen_a"
+  },
+  "_behaviors": {
+    "shisa_study": {
+      "on": "idle",
+      "layer_mode": "full",
+      "step": [
+        {
+          "frame": "full/shisa_study_a",
+          "ms": 1600
+        },
+        {
+          "frame": "full/shisa_study_b",
+          "ms": 1600
+        }
+      ],
+      "breathe": {
+        "period_ms": 3200,
+        "pt": 1.2
+      }
+    },
+    "shisa_pass": {
+      "on": "milestone",
+      "layer_mode": "full",
+      "frame_ms": 450,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "hop",
+          "pt": 2.4,
+          "period_ms": 450,
+          "count": 2,
+          "squash": 0.02
+        }
+      ]
+    },
+    "shisa_ramen": {
+      "on": "gesture",
+      "layer_mode": "full",
+      "step": [
+        {
+          "frame": "full/shisa_ramen_a",
+          "ms": 1400
+        },
+        {
+          "frame": "full/shisa_ramen_b",
+          "ms": 1600
+        }
+      ],
+      "breathe": {
+        "period_ms": 3000,
+        "pt": 1
+      }
+    },
+    "shisa_beam": {
+      "on": "level:excited",
+      "duration_ms": 1500,
+      "cooldown_s": 15,
+      "head": {
+        "layer": "head/excited"
+      },
+      "motion": [
+        {
+          "target": "body",
+          "kind": "hop",
+          "pt": 1.6,
+          "period_ms": 420,
+          "count": 2,
+          "squash": 0.02
+        }
+      ]
+    },
+    "shisa_fever": {
+      "on": "level:overheat",
+      "duration_ms": 2200,
+      "cooldown_s": 12,
+      "head": {
+        "layer": "head/overheat"
+      },
+      "motion": [
+        {
+          "target": "body",
+          "kind": "sway",
+          "pt": 2,
+          "period_ms": 1100,
+          "count": 2
+        }
+      ]
+    },
+    "shisa_startle": {
+      "on": "wake",
+      "duration_ms": 700,
+      "cooldown_s": 20,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "hop",
+          "pt": 2.4,
+          "period_ms": 320,
+          "count": 1,
+          "squash": 0.02
+        }
+      ]
+    },
+    "shisa_hum": {
+      "on": "ambient",
+      "duration_ms": 2400,
+      "cooldown_s": 60,
+      "motion": [
+        {
+          "target": "body",
+          "kind": "sway",
+          "pt": 2.4,
+          "period_ms": 800,
+          "count": 3
+        }
+      ],
+      "fx": [
+        {
+          "layer": "fx/shisa_notes",
+          "kind": "float",
+          "anchor": [
+            860,
+            218
+          ],
+          "period_ms": 1200,
+          "rise_pt": 12
+        }
+      ]
+    },
+    "shisa_serve": {
+      "on": "prop",
+      "duration_ms": 1100,
+      "cooldown_s": 3,
+      "head": {
+        "layer": "head/excited"
+      },
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2,
+          "period_ms": 500,
+          "count": 1
+        }
+      ]
+    }
+  },
+  "_timing": {
+    "level_up": [
+      12,
+      22,
+      34
+    ],
+    "ambient_every_s": [
+      70,
+      180
+    ]
+  }
+}
