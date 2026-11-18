@@ -20,6 +20,8 @@ tl() { "$APP" --character-dir "$PET/characters/$2" --job "$3" --render-timeline 
 bhv usagi basic & bhv chiikawa developer & bhv hachiware designer & bhv momonga marketer &
 bhv kurimanju finance & bhv rakko security & bhv shisa infra & bhv kani planner &
 tl tl_typing chiikawa developer demo 7 --keys &
+# 설치 가이드의 "입력 키 보기" 장면: 같은 타이핑을 말풍선 없이
+tl tl_typing_plain chiikawa developer demo 7 &
 tl tl_levels hachiware designer levels 14 --keys &
 tl tl_mouse momonga marketer mouse 6 --keys &
 # Jobs 장면: 같은 burst 시나리오를 직군만 바꿔 뽑고, 직군마다 다음 몰아치기 구간을 잘라 쓴다
@@ -32,7 +34,7 @@ SPEC='{
   "rakko_parfait": ["bhv_rakko/rakko_parfait"], "kuri_snack": ["bhv_kurimanju/kuri_snack"], "kani_read": ["bhv_kani/kani_read"],
   "chiikawa_teary": ["bhv_chiikawa/teary"], "hachiware_humming": ["bhv_hachiware/humming"], "momonga_kirakira": ["bhv_momonga/kirakira"],
   "kuri_haa": ["bhv_kurimanju/kuri_haa"], "rakko_joa": ["bhv_rakko/rakko_joa"], "shisa_beam": ["bhv_shisa/shisa_beam"], "kani_joy": ["bhv_kani/kani_joy"],
-  "typing": ["tl_typing", 0, 180], "levels": ["tl_levels", 0, 210], "mouse": ["tl_mouse", 30, 180],
+  "typing": ["tl_typing", 0, 180], "typing_plain": ["tl_typing_plain", 0, 180], "levels": ["tl_levels", 0, 210], "mouse": ["tl_mouse", 30, 180],
   "job_developer": ["job_developer", 9, 81], "job_designer": ["job_designer", 99, 171], "job_infra": ["job_infra", 189, 261]
 }'
 "$PY" "$ROOT/scripts/conv.py" "$RAW" "$ROOT/public/pets" "$SPEC"
