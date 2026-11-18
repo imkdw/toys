@@ -1,0 +1,23 @@
+[package]
+name = "ascii-art"
+version = "0.1.0"
+edition = "2024"
+description = "사진/영상을 터미널 컬러 ASCII 아트로 보여주는 CLI"
+publish = false
+
+[[bin]]
+name = "ascii-art"
+path = "src/main.rs"
+
+[lib]
+name = "ascii_art"
+path = "src/lib.rs"
+
+[dependencies]
+libc = "0.2"
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
