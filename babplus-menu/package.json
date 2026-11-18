@@ -1,0 +1,11 @@
+{
+  "name": "kimdongmu",
+  "private": true,
+  "description": "범용 Discord 봇 코딩머신. 첫 기능은 밥풀러스 월/금 식단 알림",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "start": "node src/index.ts",
+    "test": "node --test test/*.test.ts"
+  }
+}

@@ -1,0 +1,16 @@
+# ~/.config/systemd/user/kimdongmu.service (deploy/deploy.sh 가 설치)
+[Unit]
+Description=코딩머신 Discord 봇
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/kimdongmu
+ExecStart=%h/kimdongmu/deploy/start.sh
+Restart=always
+RestartSec=10
+# .env 가 비어 있어 78 로 끝나면 계속 재시작하지 않는다
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=default.target
