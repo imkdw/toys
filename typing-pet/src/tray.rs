@@ -3,7 +3,7 @@
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-use crate::config::{Config, SIZES};
+use crate::config::Config;
 
 /// 메뉴 항목 선택 결과.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -12,7 +12,8 @@ pub enum TrayAction {
     ToggleBreathing,
     ToggleCalm,
     ToggleKeyEcho,
-    Size(f64),
+    /// 크기 조절 틀 켜기/끄기.
+    ToggleResize,
     /// `Tray::characters` 의 순번.
     Character(usize),
     /// `Tray::jobs` 의 순번 (책상 장비).
@@ -30,9 +31,8 @@ pub struct Tray {
     calm: CheckMenuItem,
     key_echo: CheckMenuItem,
     login: CheckMenuItem,
-    sizes: Vec<(f64, CheckMenuItem)>,
-    /// 지금 크기 표시 + 자유 조절 안내 (누를 수 없음).
-    size_now: MenuItem,
+    /// 크기 조절 틀 (켜져 있으면 체크).
+    resize: CheckMenuItem,
     /// (폴더 이름, 메뉴 항목)
     characters: Vec<(String, CheckMenuItem)>,
     /// (직군 id, 메뉴 항목)
@@ -70,8 +70,12 @@ fn icon() -> Icon {
     Icon::from_rgba(rgba, n, n).expect("아이콘")
 }
 
-fn size_label(size: f64) -> String {
-    format!("지금 {size:.0} pt (캐릭터 위에서 스크롤/핀치로 조절)")
+fn resize_label(size: f64, on: bool) -> String {
+    if on {
+        format!("크기 조절 끝내기 ({size:.0} pt, Enter 완료 / Esc 취소)")
+    } else {
+        format!("크기 조절 ({size:.0} pt)")
+    }
 }
 
 impl Tray {
@@ -102,21 +106,11 @@ impl Tray {
         let breathing = CheckMenuItem::new("숨쉬기", true, cfg.breathing, None);
         let calm = CheckMenuItem::new("반응 줄이기", true, cfg.calm, None);
         let key_echo = CheckMenuItem::new("입력 키 보기", true, cfg.key_echo, None);
-        let size_menu = Submenu::new("크기", true);
-        let mut sizes = Vec::new();
-        for s in SIZES {
-            let item = CheckMenuItem::new(format!("{s:.0} pt"), true, (cfg.size - s).abs() < 0.5, None);
-            size_menu.append(&item).map_err(|e| e.to_string())?;
-            sizes.push((s, item));
-        }
-        let size_now = MenuItem::new(size_label(cfg.size), false, None);
-        size_menu
-            .append_items(&[&PredefinedMenuItem::separator(), &size_now])
-            .map_err(|e| e.to_string())?;
+        let resize = CheckMenuItem::new(resize_label(cfg.size, false), true, false, None);
         let login = CheckMenuItem::new("로그인 시 자동 실행", crate::mac::bundle_path().is_some(), crate::mac::login_item_enabled(), None);
         let warning = MenuItem::new("⚠ 입력 모니터링 권한 필요 (설정 열기)", true, None);
         let quit = MenuItem::new("종료", true, None);
-        menu.append_items(&[&char_menu, &job_menu, &visible, &breathing, &calm, &key_echo, &size_menu, &login, &PredefinedMenuItem::separator(), &quit])
+        menu.append_items(&[&char_menu, &job_menu, &visible, &breathing, &calm, &key_echo, &resize, &login, &PredefinedMenuItem::separator(), &quit])
             .map_err(|e| e.to_string())?;
 
         let mut ids = vec![
@@ -124,13 +118,11 @@ impl Tray {
             (breathing.id().clone(), TrayAction::ToggleBreathing),
             (calm.id().clone(), TrayAction::ToggleCalm),
             (key_echo.id().clone(), TrayAction::ToggleKeyEcho),
+            (resize.id().clone(), TrayAction::ToggleResize),
             (login.id().clone(), TrayAction::ToggleLoginItem),
             (warning.id().clone(), TrayAction::OpenPermissionSettings),
             (quit.id().clone(), TrayAction::Quit),
         ];
-        for (s, item) in &sizes {
-            ids.push((item.id().clone(), TrayAction::Size(*s)));
-        }
         for (i, (_, item)) in chars.iter().enumerate() {
             ids.push((item.id().clone(), TrayAction::Character(i)));
         }
@@ -150,7 +142,7 @@ impl Tray {
             .with_tooltip("typing-pet")
             .build()
             .map_err(|e| e.to_string())?;
-        Ok(Self { _icon: icon, menu, visible, breathing, calm, key_echo, login, sizes, size_now, characters: chars, jobs: job_items, warning, warning_shown: false, ids })
+        Ok(Self { _icon: icon, menu, visible, breathing, calm, key_echo, login, resize, characters: chars, jobs: job_items, warning, warning_shown: false, ids })
     }
 
     /// 순번 -> 캐릭터 폴더 이름.
@@ -170,7 +162,7 @@ impl Tray {
         }
     }
 
-    pub fn sync(&self, cfg: &Config) {
+    pub fn sync(&self, cfg: &Config, resizing: bool) {
         self.visible.set_checked(cfg.visible);
         self.breathing.set_checked(cfg.breathing);
         self.calm.set_checked(cfg.calm);
@@ -179,10 +171,8 @@ impl Tray {
             item.set_checked(cfg.job.as_deref() == Some(id.as_str()));
         }
         self.login.set_checked(crate::mac::login_item_enabled());
-        for (s, item) in &self.sizes {
-            item.set_checked((cfg.size - s).abs() < 0.5);
-        }
-        self.size_now.set_text(size_label(cfg.size));
+        self.resize.set_checked(resizing);
+        self.resize.set_text(resize_label(cfg.size, resizing));
     }
 
     /// 입력 모니터링 권한이 없을 때 메뉴 맨 위에 경고 표시.

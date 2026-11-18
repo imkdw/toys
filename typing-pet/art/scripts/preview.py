@@ -71,7 +71,7 @@ def main() -> None:
     gif(frames, a.out / "timeline.gif", 1000 // a.fps)
     # 앞발 경계 확인: up 과 각 앞발 자세를 번갈아
     paw = [combos / "head-normal__paw_l-up__paw_r-up.png"]
-    for n in ["paw_l-down__paw_r-up", "paw_l-up__paw_r-down", "paw_l-up__paw_r-center", "paw_l-up__paw_r-mouse", "paw_l-up__paw_r-mouse_click"]:
+    for n in ["paw_l-down__paw_r-up", "paw_l-up__paw_r-down", "paw_l-up__paw_r-mouse", "paw_l-up__paw_r-mouse_click"]:
         paw += [combos / f"head-normal__{n}.png", combos / "head-normal__paw_l-up__paw_r-up.png"]
     gif([Image.open(p) for p in paw], a.out / "paws.gif", 350)
     summary = json.loads((tl / "timeline.json").read_text())

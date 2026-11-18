@@ -164,8 +164,7 @@ fn check_key_reaction(lines: &[Line], idx: usize, code: u16, keys: &typing_pet::
     let zone = zone_of(code, keys);
     let (field, down) = match zone {
         Zone::Left => ("paw_l", "down"),
-        Zone::Center => ("paw_r", "center"),
-        Zone::Right => ("paw_r", "down"),
+        Zone::Center | Zone::Right => ("paw_r", "down"),
     };
     let states: Vec<&Line> = lines[idx + 1..].iter().filter(|l| l.kind == "state").collect();
     let Some(first) = states.first() else {

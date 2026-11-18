@@ -53,8 +53,8 @@ title = "개발자"
 items = ["mug", "duck"]
 
 [[job]]
-id = "student"
-title = "학생"
+id = "writer"
+title = "작가"
 items = ["lamp"]
 "#,
     )
@@ -111,6 +111,18 @@ fn job_and_character_items_share_the_desk() {
 }
 
 #[test]
+fn removed_job_falls_back_to_default() {
+    let c = catalog();
+    let mut job = Some("student".to_string());
+    assert!(c.fix_job(&mut job, "dev"));
+    assert_eq!(job.as_deref(), Some("dev"));
+    assert!(!c.fix_job(&mut job, "dev"), "있는 직군은 그대로");
+    let mut none = None;
+    assert!(!c.fix_job(&mut none, "dev"), "None (캐릭터 소품만) 은 그대로");
+    assert_eq!(none, None);
+}
+
+#[test]
 fn props_are_drawn_on_top_and_follow_the_job() {
     let t0 = Instant::now();
     let mut m = manifest(Some("cake"));
@@ -122,7 +134,7 @@ fn props_are_drawn_on_top_and_follow_the_job() {
     for p in ["prop/mug", "prop/duck", "prop/cake"] {
         assert!(n.iter().position(|x| x == p).unwrap() > head, "소품은 앞발/머리 뒤에 그린다: {n:?}");
     }
-    a.set_job(Some("student"));
+    a.set_job(Some("writer"));
     let n = names(&a.frame(t0 + ms(2100)));
     assert!(n.contains(&"prop/lamp".into()) && n.contains(&"prop/cake".into()) && !n.contains(&"prop/mug".into()), "{n:?}");
     a.set_job(None);

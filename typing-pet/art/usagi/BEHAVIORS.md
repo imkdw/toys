@@ -2,7 +2,7 @@
 
 ## 성격 한 줄
 
-시끄럽고 예측 불가, 몸이 먼저 나간다. 소리 지르고 뛰고 떤다.
+시끄럽고 예측 불가, 몸이 먼저 나간다. 소리 지르고 뛴다.
 
 ## 대표 동작
 
@@ -11,12 +11,9 @@
 | 동작 | 참고 회차/프레임 id | 연결할 cue | 표현 (layer_mode, motion, fx, head) | 필요한 그림 |
 |---|---|---|---|---|
 | "우라!" 외침 | 66화 e066-007, 15화 e015-014 | `level:excited` enter | overlay, 말풍선 pop_in (통통 뛰기는 뺌) | fx/ura (말풍선 "우라!") |
-| 프루루루 고속 진동 | 134화 e134-023 | `level:dizzy` hold | overlay, 몸 tremble (빠르게) | 없음 |
-| 과열에 부르르 (`fired`) | 134화 e134-023 (김 내며 떠는 장면) | `level:overheat` enter | overlay, 몸 tremble 2pt (애니에 없는 들썩/끄덕은 뺌) | 없음 |
 | "하아?" | 36화 e036-024 | `wake` | overlay, 머리 바꾸기 + nod, 말풍선 pop_in | head/haa, fx/haa (말풍선 "하아?") |
-| 귀 쫑긋 | 204화 e204-007 | `ambient` | overlay, 머리 sway 짧게 | 없음 |
 | 졸기 | 만화 2023-02-06, 2026-09-09 | `idle` | full, 감은 눈 `full/sleep_a` + 숨쉬기 + 콧방울/Zzz (반쯤 뜬 눈 렘 프레임은 근거와 달라 뺌) | 기존 |
-| 야하! | 204화 e204-016 | `milestone` | full, `full/yaha_a` 1장 + 말풍선 "야하!" (애니에 없는 양팔 벌린 yaha_b 와 통통은 뺌) | fx/yaha |
+| 야하! | 204화 e204-016 | `milestone` | overlay, 머리 `head/normal` 고정 + 말풍선 "야하!" pop_in. 타이핑은 그대로 (팔 드는 full/yaha_a 는 검수 피드백으로 뺌, 2026-11-17) | fx/yaha |
 | 지팡이 휘두르기 | 36화 | `gesture` | full, 2장 교대 + 몸 sway | 기존 |
 
 ## 공통 머리 단계
@@ -32,3 +29,5 @@
 | `_anim.pop_scale` | 1.04 | 1.08 | 단계가 오를 때 크게 반응 |
 | `_timing.level_up` | [12, 22, 32] | [10, 19, 28] | 쉽게 흥분한다 |
 | `_timing.burst_keys` | 9 | 8 | 조금만 몰아쳐도 burst |
+
+귀 쫑긋(`ambient`, e204-007)은 검수 피드백으로 뺐다 (2026-11-17).

@@ -6,9 +6,8 @@
   "paw_r/down": "right_down_1",
   "head/smug": "head_smug_1",
   "full/bwabwa_a": "scene_bwa_a_2",
-  "paw_r/center": "right_center_1",
-  "paw_r/mouse": "mouse_1",
-  "paw_r/mouse_click": "mouse_click_1",
+  "paw_r/mouse": "mouse_short_1",
+  "paw_r/mouse_click": "mouse_click_short_3",
   "head/excited": "head_excited_2",
   "head/overheat": "head_overheat_2",
   "head/pout": "head_pout_2",
@@ -82,7 +81,7 @@
           "target": "body",
           "kind": "tremble",
           "pt": 1.4,
-          "period_ms": 70
+          "period_ms": 100
         }
       ],
       "fx": [
@@ -106,7 +105,7 @@
         {
           "target": "body",
           "kind": "sway",
-          "pt": 3,
+          "pt": 2.6,
           "period_ms": 800,
           "count": 2
         }
@@ -138,8 +137,8 @@
         {
           "target": "body",
           "kind": "tremble",
-          "pt": 0.8,
-          "period_ms": 60
+          "pt": 1.2,
+          "period_ms": 110
         }
       ],
       "fx": [
@@ -168,7 +167,7 @@
           "target": "body",
           "kind": "tremble",
           "pt": 1.6,
-          "period_ms": 50
+          "period_ms": 90
         },
         {
           "target": "head",
@@ -205,7 +204,7 @@
         {
           "target": "body",
           "kind": "squash",
-          "squash": 0.04,
+          "squash": 0.02,
           "period_ms": 350,
           "count": 1
         }
@@ -222,7 +221,7 @@
         {
           "target": "body",
           "kind": "sway",
-          "pt": 3,
+          "pt": 2.6,
           "period_ms": 900,
           "count": 2
         }
@@ -252,7 +251,16 @@
       "cooldown_s": 3,
       "head": {
         "layer": "head/smug"
-      }
+      },
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2.0,
+          "period_ms": 500,
+          "count": 1
+        }
+      ]
     }
   },
   "_timing": {
@@ -267,7 +275,7 @@
       140
     ]
   },
-  "_anim": {
-    "pop_scale": 1.06
+  "_mouse": {
+    "root": [668, 640]
   }
 }

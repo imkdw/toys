@@ -67,7 +67,7 @@ fn wake_after_long_rest_only() {
     p.on_input(Input::Key(0), t0 + ms(1000));
     p.on_input(Input::Key(0), t0 + ms(15_999));
     assert!(!cues(&mut p).contains(&Cue::Wake), "15초 미만 쉼");
-    p.on_input(Input::MouseMove, t0 + ms(31_000));
+    p.on_input(Input::MOVE, t0 + ms(31_000));
     assert_eq!(cues(&mut p), vec![Cue::Wake], "마우스로 깨워도 wake");
     p.on_input(Input::Key(0), t0 + ms(31_100));
     assert!(cues(&mut p).is_empty());
@@ -167,7 +167,6 @@ pt = 2.0
 [[scene.step]]
 frame = "full/gesture"
 ms = 1000
-blend_ms = 200
 
 [[scene.step]]
 frame = "full/startle"
@@ -230,6 +229,8 @@ fn behavior_validation_errors() {
     assert!(bad("on = \"wake\"").is_err(), "아무것도 안 하는 overlay");
     assert!(bad("on = \"wake\"\nlayer_mode = \"overlay\"\nframes = [\"full/startle\"]").is_err(), "overlay 에 frames");
     assert!(bad("on = \"wake\"\nframes = [\"full/nope\"]").is_err(), "없는 레이어");
+    assert!(bad("on = \"wake\"\n[[behavior.step]]\nframe = \"full/gesture\"\nms = 500\nblend_ms = 100\n[[behavior.step]]\nframe = \"full/startle\"\nms = 500").is_err(), "다른 그림 사이 크로스페이드");
+    assert!(bad("on = \"wake\"\n[[behavior.step]]\nframe = \"full/gesture\"\nms = 500\nblend_ms = 100").is_ok(), "같은 그림끼리는 됨");
     assert!(bad("on = \"wake\"\nduration_ms = 0\n[[behavior.motion]]\ntarget = \"body\"\nkind = \"hop\"").is_err(), "끝없는 길이");
     assert!(bad("on = \"wake\"\n[[behavior.motion]]\ntarget = \"fx:nope\"\nkind = \"sway\"").is_err(), "없는 소품을 움직임");
     assert!(bad("on = \"wake\"\nchance = 1.5\n[[behavior.motion]]\ntarget = \"body\"\nkind = \"hop\"").is_err());
@@ -382,10 +383,9 @@ fn body_motion_without_clean_desk_is_limited_to_2pt() {
 fn head_swap_and_nod() {
     let m = test_manifest();
     let (mut a, t) = forced(&m, Head::Normal, "t_nod");
-    match &find_head(&a.frame(t + ms(100))).kind {
-        DrawKind::Mix { a, b, t } => assert!(a == "head/normal" && b == "head/alt_a" && *t > 0.0 && *t < 1.0),
-        k => panic!("섞는 중이어야 함 {k:?}"),
-    }
+    // 섞지 않고 바로 바꾸고, 바뀐 순간 머리가 살짝 커졌다 돌아온다 (팝)
+    let f = a.frame(t + ms(60));
+    assert_eq!(find_head(&f).kind, DrawKind::Layer { name: "head/alt_a".into() }, "바로 교체");
     let f = a.frame(t + ms(300));
     assert!(find(&f, "head/alt_a").is_some(), "바뀐 머리");
     let d = deform(&f).expect("변형");
@@ -596,3 +596,4 @@ fn behavior_frames_and_scenarios_cover_every_cue() {
     let k = fired("keys");
     assert!(k.contains(&Cue::Key(NamedKey::Enter)) && k.contains(&Cue::Key(NamedKey::Backspace)));
 }
+

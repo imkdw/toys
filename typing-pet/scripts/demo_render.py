@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFont
 FONT = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
 HEAD = {"normal": "기본", "excited": "신남", "dizzy": "빙글 안경 + 귀 흔들기", "overheat": "과열", "sleepy": "졸림",
         "sunglasses": "선글라스"}
-PAW_R = {"up": "", "down": "오른발 누름", "center": "오른발 가운데", "mouse": "오른발 마우스", "mouse_click": "마우스 클릭"}
+PAW_R = {"up": "", "down": "오른발 누름", "mouse": "오른발 마우스", "mouse_click": "마우스 클릭"}
 
 
 def phase(ms: int) -> str:

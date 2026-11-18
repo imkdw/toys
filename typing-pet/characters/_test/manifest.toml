@@ -6,7 +6,7 @@ layers = [
   "base",
   "head/normal", "head/excited", "head/dizzy", "head/dizzy_wiggle", "head/overheat", "head/sleepy", "head/sunglasses",
   "paw_l/up", "paw_l/down",
-  "paw_r/up", "paw_r/down", "paw_r/center", "paw_r/mouse", "paw_r/mouse_click",
+  "paw_r/up", "paw_r/down", "paw_r/mouse", "paw_r/mouse_click",
   "head/alt_a", "head/alt_b",
   "base_clean",
   "fx/sunglasses", "fx/bubble", "fx/drop", "fx/note", "fx/white",
@@ -31,7 +31,6 @@ paw_r_low = "mask/paw_r_low"
 [tips]
 "paw_l/down" = [160, 392]
 "paw_r/down" = [320, 392]
-"paw_r/center" = [250, 395]
 
 # 테스트는 모든 머리 단계를 쓰므로 전부 허용한다 (실제 캐릭터는 애니 근거가 있는 표정만)
 [expressions]

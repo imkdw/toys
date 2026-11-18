@@ -5,9 +5,9 @@
   "paw_l/down": "left_down_1",
   "paw_r/down": "right_down_1",
   "base_clean": "base_clean_1",
-  "full/rakko_parfait_a": "scene_parfait_a_1",
-  "full/rakko_parfait_b": "scene_parfait_b_openeyes",
-  "full/rakko_slash_a": "scene_slash_a_1",
+  "full/rakko_parfait_a": "scene_parfait_a_side_2",
+  "full/rakko_parfait_b": "scene_parfait_b_side_2",
+  "full/rakko_slash_a": "scene_slash_a_pair_2",
   "full/rakko_slash_b": "scene_slash_b_openeyes",
   "full/rakko_cocoa_a": "scene_cocoa_a_1",
   "full/rakko_cocoa_b": "scene_cocoa_b_1",
@@ -58,13 +58,11 @@
       "step": [
         {
           "frame": "full/rakko_parfait_a",
-          "ms": 2600,
-          "blend_ms": 200
+          "ms": 2600
         },
         {
           "frame": "full/rakko_parfait_b",
-          "ms": 3000,
-          "blend_ms": 200
+          "ms": 3000
         }
       ],
       "breathe": {
@@ -99,7 +97,7 @@
           "period_ms": 500,
           "count": 1,
           "delay_ms": 500,
-          "squash": 0.03
+          "squash": 0.02
         }
       ]
     },
@@ -277,15 +275,20 @@
     ]
   },
   "_anim": {
-    "pop_scale": 1.02,
     "glow_ms": 200
   },
   "_desk": {
     "item": "pouch"
   },
-  "paw_r/center": "right_center_1",
-  "paw_r/mouse": "mouse_1",
-  "paw_r/mouse_click": "mouse_click_1",
+  "paw_r/mouse": "mouse_short_2",
+  "paw_r/mouse_click": "mouse_click_short_2",
   "head/excited": "head_excited_1",
-  "head/overheat": "head_overheat_1"
+  "head/overheat": "head_overheat_1",
+  "_pair": {
+    "full/rakko_slash_a": "full/rakko_slash_b"
+  },
+  "_mouse": {
+    "fill": [252, 249, 248],
+    "tip_fill": "line"
+  }
 }

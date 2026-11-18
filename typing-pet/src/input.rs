@@ -17,9 +17,15 @@ use crate::config::Keys;
 pub enum Input {
     /// 키 누름 (macOS 가상 키 코드). 자동 반복은 이미 걸러진 상태.
     Key(u16),
-    /// 마우스 이동/드래그/스크롤 (쓰로틀 후).
-    MouseMove,
+    /// 마우스 이동/드래그/스크롤 (쓰로틀 후). 커서 이동량 (pt, 쓰로틀로 건너뛴 이동까지 더한 값).
+    /// 스크롤처럼 방향이 없으면 0, 0.
+    MouseMove { dx: i32, dy: i32 },
     MouseClick,
+}
+
+impl Input {
+    /// 방향 없는 마우스 이동 (스크롤, 렌더 시나리오).
+    pub const MOVE: Input = Input::MouseMove { dx: 0, dy: 0 };
 }
 
 /// 커서 위치 (전역 좌표, 주 화면 좌상단 원점, pt). 캐릭터 위에 커서가 있을 때만 창이 클릭을 받게 하는 데 쓴다.
@@ -55,8 +61,9 @@ pub enum RawEvent {
     KeyUp { code: u16 },
     /// 수식키 변경. flags 는 CGEventFlags 원값.
     FlagsChanged { code: u16, flags: u64 },
-    MouseMove,
-    MouseDrag,
+    /// 커서 이동량 (pt).
+    MouseMove { dx: i32, dy: i32 },
+    MouseDrag { dx: i32, dy: i32 },
     Scroll,
     MouseDown,
 }
@@ -116,11 +123,13 @@ pub fn modifier_pressed(code: u16, flags: u64) -> bool {
 pub struct Converter {
     throttle: Duration,
     last_mouse: Option<Instant>,
+    /// 쓰로틀로 건너뛴 이동량. 다음에 내보내는 이동에 더한다.
+    acc: (i32, i32),
 }
 
 impl Converter {
     pub fn new(mouse_throttle: Duration) -> Self {
-        Self { throttle: mouse_throttle, last_mouse: None }
+        Self { throttle: mouse_throttle, last_mouse: None, acc: (0, 0) }
     }
 
     pub fn convert(&mut self, raw: RawEvent, now: Instant) -> Option<Input> {
@@ -129,16 +138,21 @@ impl Converter {
             RawEvent::KeyDown { code, .. } => Some(Input::Key(code)),
             RawEvent::KeyUp { .. } => None,
             RawEvent::FlagsChanged { code, flags } => modifier_pressed(code, flags).then_some(Input::Key(code)),
-            RawEvent::MouseMove | RawEvent::MouseDrag | RawEvent::Scroll => {
-                if self.last_mouse.is_some_and(|t| now.duration_since(t) < self.throttle) {
-                    None
-                } else {
-                    self.last_mouse = Some(now);
-                    Some(Input::MouseMove)
-                }
-            }
+            RawEvent::MouseMove { dx, dy } | RawEvent::MouseDrag { dx, dy } => self.mouse(dx, dy, now),
+            RawEvent::Scroll => self.mouse(0, 0, now),
             RawEvent::MouseDown => Some(Input::MouseClick),
         }
+    }
+
+    /// 마우스 이동 쓰로틀: 간격 안의 이동은 이동량만 모아 두고 다음에 한 번에 내보낸다.
+    fn mouse(&mut self, dx: i32, dy: i32, now: Instant) -> Option<Input> {
+        self.acc = (self.acc.0.saturating_add(dx), self.acc.1.saturating_add(dy));
+        if self.last_mouse.is_some_and(|t| now.duration_since(t) < self.throttle) {
+            return None;
+        }
+        self.last_mouse = Some(now);
+        let (dx, dy) = std::mem::take(&mut self.acc);
+        Some(Input::MouseMove { dx, dy })
     }
 }
 
@@ -220,6 +234,14 @@ mod tap {
 
     const FIELD_AUTOREPEAT: u32 = 8;
     const FIELD_KEYCODE: u32 = 9;
+    // kCGMouseEventDeltaX/Y: 이전 이동 이벤트에서 커서가 움직인 양 (pt)
+    const FIELD_DELTA_X: u32 = 4;
+    const FIELD_DELTA_Y: u32 = 5;
+
+    fn delta(event: CGEventRef) -> (i32, i32) {
+        let f = |k| unsafe { CGEventGetIntegerValueField(event, k) }.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        (f(FIELD_DELTA_X), f(FIELD_DELTA_Y))
+    }
 
     static TAP: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
@@ -265,13 +287,19 @@ mod tap {
                 code: unsafe { CGEventGetIntegerValueField(event, FIELD_KEYCODE) } as u16,
                 flags: unsafe { CGEventGetFlags(event) },
             },
-            MOUSE_MOVED => RawEvent::MouseMove,
-            LEFT_DRAGGED | RIGHT_DRAGGED | OTHER_DRAGGED => RawEvent::MouseDrag,
+            MOUSE_MOVED => {
+                let (dx, dy) = delta(event);
+                RawEvent::MouseMove { dx, dy }
+            }
+            LEFT_DRAGGED | RIGHT_DRAGGED | OTHER_DRAGGED => {
+                let (dx, dy) = delta(event);
+                RawEvent::MouseDrag { dx, dy }
+            }
             SCROLL => RawEvent::Scroll,
             LEFT_DOWN | RIGHT_DOWN | OTHER_DOWN => RawEvent::MouseDown,
             _ => return event,
         };
-        if matches!(raw, RawEvent::MouseMove | RawEvent::MouseDrag | RawEvent::MouseDown)
+        if matches!(raw, RawEvent::MouseMove { .. } | RawEvent::MouseDrag { .. } | RawEvent::MouseDown)
             && (raw == RawEvent::MouseDown || ctx.last_cursor.is_none_or(|t| now.duration_since(t) >= CURSOR_INTERVAL))
         {
             ctx.last_cursor = Some(now);

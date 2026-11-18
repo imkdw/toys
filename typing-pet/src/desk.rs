@@ -105,6 +105,18 @@ impl Catalog {
         self.jobs.iter().find(|j| j.id == id)
     }
 
+    /// 저장된 직군이 목록에서 빠졌으면 `fallback` 으로 바꾼다 (예: 없어진 "student").
+    /// None (캐릭터 소품만) 은 그대로 둔다. 바꿨으면 true.
+    pub fn fix_job(&self, job: &mut Option<String>, fallback: &str) -> bool {
+        match job {
+            Some(id) if !self.jobs.is_empty() && self.job(id).is_none() => {
+                *job = Some(fallback.to_string());
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn layer_path(&self, id: &str) -> PathBuf {
         self.dir.join("layers").join(format!("{id}.png"))
     }

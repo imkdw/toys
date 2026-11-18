@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Anim, Behavior, Breathe, Desk, FxKind, LayerMode, Manifest, Motion, MotionKind, MotionTarget, SceneFx, Step, Swing, When};
+use crate::config::{Anim, Behavior, Breathe, Desk, FxKind, LayerMode, Manifest, Motion, MotionKind, MotionTarget, MouseRig, SceneFx, Step, When};
 use crate::desk::{Catalog, Prop};
 use crate::pet::{Cue, Head, PawL, PawR, PetEvent, PetState, Pose};
 
@@ -80,6 +80,19 @@ pub struct DrawCmd {
     /// 여러 레이어를 같은 값으로 그리면 합성된 그림 전체를 미는 것과 같다 (이음매 없음).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deform: Option<Deform>,
+    /// 팔 기울이기 (마우스 리그).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bend: Option<Bend>,
+}
+
+/// 팔 그림을 어깨는 제자리에 두고 손이 `d` 만큼 가도록 기울인다 (캔버스 px).
+/// root -> tip 축에서 `hand` 이후(손)는 그대로 `d` 만큼 옮기고, 그 앞은 어깨에서 멀수록 많이 옮긴다.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Bend {
+    pub root: [f32; 2],
+    pub tip: [f32; 2],
+    pub hand: f32,
+    pub d: [f32; 2],
 }
 
 /// 변환 하나 (`p -> anchor + (p - anchor) * s + offset`, 캔버스 px).
@@ -96,14 +109,12 @@ impl From<Xf> for Affine {
     }
 }
 
-/// 변형장 `field` (R 몸, G 머리, B 마우스 가중치) 로 각 변환을 가중치만큼 섞어 민다 (docs/MOTION_QA.md).
+/// 변형장 `field` (R 몸, G 머리 가중치) 로 각 변환을 가중치만큼 섞어 민다 (docs/MOTION_QA.md).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Deform {
     pub field: String,
     pub body: Affine,
     pub head: Affine,
-    /// 손과 마우스 이동 (캔버스 px).
-    pub mouse: [f32; 2],
 }
 
 fn unit2() -> [f32; 2] {
@@ -125,6 +136,7 @@ impl DrawCmd {
             anchor: [0.0; 2],
             mask: None,
             deform: None,
+            bend: None,
         }
     }
     /// 이 명령이 쓰는 레이어 이름들.
@@ -171,8 +183,9 @@ impl Layers {
         let heads = m.layers.iter().filter(|l| l.starts_with("head/") && m.allows_head(l)).cloned().collect();
         Self { have: m.layer_set(), heads: Some(heads) }
     }
+    /// 레이어가 있는가. 앞발 캐릭터 마스크(`mask/char/<앞발 레이어>`)는 렌더러가 앞발 레이어에서 만드므로 그 레이어가 있으면 있다.
     pub fn has(&self, name: &str) -> bool {
-        self.have.contains(name)
+        self.have.contains(name) || name.strip_prefix("mask/char/").is_some_and(|l| l.starts_with("paw_") && self.have.contains(l))
     }
     /// 머리로 그릴 수 있는 레이어인가 (파일이 있고 표정이 허용됨).
     pub fn has_head(&self, name: &str) -> bool {
@@ -189,7 +202,6 @@ impl Layers {
             cur = match cur {
                 "head/dizzy_wiggle" => "head/dizzy",
                 "head/sunglasses" | "head/excited" | "head/dizzy" | "head/overheat" | "head/sleepy" => "head/normal",
-                "paw_r/center" => "paw_r/down",
                 "paw_r/mouse_click" => "paw_r/mouse",
                 "paw_r/mouse" | "paw_r/down" => "paw_r/up",
                 "paw_l/down" => "paw_l/up",
@@ -279,8 +291,10 @@ pub fn motion_xf(motions: &[Motion], fx: &[SceneFx], target: MotionTarget, lt: f
                 }
             }
             MotionKind::Tremble => {
-                // 두 주파수를 섞어 기계적이지 않게 (합은 진폭 안)
-                dx = a * (0.7 * (2.0 * PI * u).sin() + 0.3 * (2.0 * PI * 2.3 * t / p).sin());
+                // 두 주파수를 섞어 기계적이지 않게 (합은 진폭 안). 끝으로 갈수록 절반까지 줄어든다
+                let total = if m.count > 0 { m.count as f32 * p } else { len.unwrap_or(0.0) - m.delay_ms as f32 };
+                let decay = if total > 0.0 { 1.0 - 0.5 * (t / total).clamp(0.0, 1.0) } else { 1.0 };
+                dx = a * decay * (0.7 * (2.0 * PI * u).sin() + 0.3 * (2.0 * PI * 2.3 * t / p).sin());
             }
             MotionKind::Sway => dx = a * (2.0 * PI * u).sin(),
             MotionKind::Nod => dy = a * (PI * u).sin(),
@@ -350,15 +364,16 @@ fn fx_cmd(x: &SceneFx, el: f32, w: f32, bob: f32, pt: f32) -> Option<DrawCmd> {
 // ---------- 애니메이터 ----------
 
 #[derive(Debug, Clone)]
-struct HeadFade {
-    from: String,
-    start: Instant,
-}
-
-#[derive(Debug, Clone)]
 struct Glow {
     center: [f32; 2],
     start: Instant,
+    /// 누른 앞발 쪽 (paw_l / paw_r). 빛은 이 앞발의 캐릭터 픽셀 밖에만 그린다.
+    side: &'static str,
+}
+
+/// 앞발 레이어의 캐릭터 픽셀 마스크 이름 (렌더러가 레이어를 읽을 때 base_clean 과 비교해 만든다, [`crate::render::load_layers`]).
+pub fn char_mask_name(layer: &str) -> String {
+    format!("mask/char/{layer}")
 }
 
 /// 전체 프레임 재생기 (장면 단계 반복, 또는 한 장). 시간은 장면 안 경과 ms.
@@ -380,17 +395,13 @@ impl Full {
         Self { steps, cycle, breathe: None, fx: Vec::new() }
     }
     /// (지금 단계, 다음 단계로 블렌드 진행 0~1, 지금 단계 안에서 지난 ms).
+    /// 다른 그림 사이는 섞지 않고 바로 교체하므로 블렌드는 다음 단계가 같은 그림일 때만 (보이는 차이 없음, 0).
     fn pos(&self, el: u64) -> (usize, f32, u64) {
         let mut t = el % self.cycle;
         for (i, s) in self.steps.iter().enumerate() {
             let ms = s.ms.max(1);
             if t < ms {
-                let b = if s.blend_ms > 0 && t + s.blend_ms > ms {
-                    ease_in_out((t + s.blend_ms - ms) as f32 / s.blend_ms as f32)
-                } else {
-                    0.0
-                };
-                return (i, b, t);
+                return (i, 0.0, t);
             }
             t -= ms;
         }
@@ -399,23 +410,16 @@ impl Full {
     fn next_frame(&self, i: usize) -> &str {
         &self.steps[(i + 1) % self.steps.len()].frame
     }
-    /// 대표 프레임 (블렌드 중이면 더 많이 보이는 쪽).
+    /// 지금 프레임.
     fn at(&self, el: u64) -> &str {
-        let (i, b, _) = self.pos(el);
-        if b > 0.5 { self.next_frame(i) } else { &self.steps[i].frame }
+        &self.steps[self.pos(el).0].frame
     }
     fn kind(&self, el: u64) -> DrawKind {
-        let (i, b, _) = self.pos(el);
-        let (a, n) = (&self.steps[i].frame, self.next_frame(i));
-        if b > 0.0 && a != n {
-            DrawKind::Mix { a: a.clone(), b: n.to_string(), t: b }
-        } else {
-            DrawKind::Layer { name: a.clone() }
-        }
+        DrawKind::Layer { name: self.at(el).to_string() }
     }
     /// 숨쉬기/블렌드/소품이 있어 계속 다시 그려야 하는가.
     fn moving(&self) -> bool {
-        self.breathe.is_some() || !self.fx.is_empty() || self.steps.iter().any(|s| s.blend_ms > 0)
+        self.breathe.is_some() || !self.fx.is_empty()
     }
     /// 소품이 보일 정도: `on` 프레임이 보이는 비율.
     fn on_weight(&self, on: &[String], el: u64) -> f32 {
@@ -505,9 +509,12 @@ pub struct Animator {
     masks: BTreeMap<String, String>,
     head_anchor: [f32; 2],
     body_anchor: [f32; 2],
-    /// 마우스 연출 (최대 변위). 변형장이 없으면 None.
-    swing: Option<Swing>,
-    /// 변형장 레이어 (mask/warp). 있으면 몸/머리/마우스 움직임을 이음매 없이 변형으로 그린다.
+    /// 마우스 리그 (fx/mouse, fx/mouse_arm 이 있을 때).
+    rig: Option<MouseRig>,
+    /// 손이 마우스로 가기 시작한 시각, 마우스에서 떠나기 시작한 시각.
+    rig_in: Option<Instant>,
+    rig_out: Option<Instant>,
+    /// 변형장 레이어 (mask/warp). 있으면 몸/머리 움직임을 이음매 없이 변형으로 그린다.
     field: Option<String>,
     /// 캔버스 px / 표시 pt.
     px_per_pt: f32,
@@ -516,12 +523,15 @@ pub struct Animator {
     pub cue_behaviors: bool,
 
     state: PetState,
-    head_fade: Option<HeadFade>,
+    /// 지금 그리는 머리의 출처 (behavior run 번호 또는 0, 레이어). 바뀌면 팝 (교대 프레임/귀 흔들기는 같은 출처).
+    head_key: Option<(u64, String)>,
     dizzy_since: Instant,
     pop_start: Option<Instant>,
-    /// 마우스 흔들기 시작 시각과 마지막 마우스 이동 시각.
+    /// 방향 없는 마우스 이동(8자 왕복)의 시작 시각과 마지막 이동 시각.
     swing_start: Option<Instant>,
     last_move: Option<Instant>,
+    /// 손 스프링 (커서를 따라가고 멈추면 넘쳤다 돌아온다).
+    spring: Spring,
     glows: Vec<Glow>,
     /// 선글라스 낙하 시작 (머리가 Sunglasses 로 바뀐 시각).
     sun_drop: Option<Instant>,
@@ -536,10 +546,9 @@ pub struct Animator {
     runs: Vec<Run>,
     serial: u64,
     rng: u64,
-    /// 지금 보이는 full 과 그 직전 것 (바뀔 때 크로스페이드).
+    /// 지금 보이는 full (바뀌면 섞지 않고 바로 교체하고 몸을 살짝 누른다).
     shown_full: Option<Run>,
-    prev_full: Option<Run>,
-    pose_fade: Option<Instant>,
+    swap_start: Option<Instant>,
     /// 새로 시작한 behavior 이름 (트레이스용, drain_started 로 비운다).
     started: Vec<String>,
 
@@ -563,17 +572,20 @@ impl Animator {
             masks: m.masks.iter().filter(|(_, v)| m.layers.contains(v)).map(|(k, v)| (k.clone(), v.clone())).collect(),
             head_anchor: ha,
             body_anchor: m.body_anchor.unwrap_or([ha[0], ha[1] + m.canvas as f32 * 0.25]),
-            swing: m.swing.clone().filter(|_| m.masks.get("warp").is_some_and(|w| m.layers.contains(w))),
+            rig: m.mouse.clone().filter(|_| ["paw_r/mouse", "fx/mouse", "fx/mouse_arm"].iter().all(|l| m.layers.iter().any(|x| x == l))),
+            rig_in: None,
+            rig_out: None,
             field: m.masks.get("warp").filter(|w| m.layers.contains(w)).cloned(),
             px_per_pt: m.canvas as f32 / size_pt,
             breathing: false,
             cue_behaviors: true,
             state: PetState::default(),
-            head_fade: None,
+            head_key: None,
             dizzy_since: now,
             pop_start: None,
             swing_start: None,
             last_move: None,
+            spring: Spring::default(),
             glows: Vec::new(),
             sun_drop: None,
             sun_prev_head: "head/normal".into(),
@@ -584,8 +596,7 @@ impl Animator {
             serial: 0,
             rng: 0x2545_F491_4F6C_DD1D,
             shown_full: None,
-            prev_full: None,
-            pose_fade: None,
+            swap_start: None,
             started: Vec::new(),
             catalog: m.catalog.clone(),
             desk: m.desk.clone().unwrap_or_default(),
@@ -715,18 +726,11 @@ impl Animator {
                 self.dizzy_since = now;
             }
             if state.head == Head::Sunglasses && self.layers.has("fx/sunglasses") && self.layers.has_head("head/sunglasses") {
-                // 선글라스가 위에서 내려온 뒤 머리를 크로스페이드
+                // 선글라스가 위에서 내려온 뒤 머리를 바로 바꾼다
                 self.sun_drop = Some(now);
                 self.sun_prev_head = from;
-                self.head_fade = None;
             } else {
                 self.sun_drop = None;
-                self.head_fade = Some(HeadFade { from, start: now });
-            }
-            if let (Some(a), Some(b)) = (old.head.rank(), state.head.rank()) {
-                if b > a {
-                    self.pop_start = Some(now);
-                }
             }
             // 단계 cue: 이전 상태의 hold 는 끝내고, 새 상태의 enter/hold 를 시작
             let cue = Cue::of_head(state.head);
@@ -740,16 +744,38 @@ impl Animator {
                 self.fire(Cue::of_pose(p), Some(p), now);
             }
         }
+        if self.state.paw_r != state.paw_r || !events.is_empty() {
+            self.step_spring(now);
+        }
+        if self.rig.is_some() {
+            let on = |p: PawR| matches!(p, PawR::Mouse | PawR::MouseClick);
+            match (on(old.paw_r), on(state.paw_r)) {
+                // 손이 마우스로 간다 (떠나는 중이었으면 그 자리에서 되돌아간다)
+                (false, true) => {
+                    let back = self.rig_out.take().map_or(0.0, |s| 1.0 - progress(now, s, RIG_OUT_MS));
+                    self.rig_in = Some(now.checked_sub(Duration::from_millis((back * RIG_IN_MS as f32) as u64)).unwrap_or(now));
+                }
+                // 손이 키보드로 돌아간다. 키를 누르러 가는 것이면 바로
+                (true, false) => {
+                    self.rig_in = None;
+                    self.rig_out = (state.paw_r == PawR::Up).then_some(now);
+                }
+                _ => {}
+            }
+            if state.paw_r == PawR::Down {
+                self.rig_out = None;
+            }
+        }
         for ev in events {
             match ev {
-                PetEvent::PressL => self.add_glow(PawL::Down.layer(), now),
-                PetEvent::PressR(pose) => self.add_glow(pose.layer(), now),
-                PetEvent::MouseMove => {
-                    if self.swing_env(now) <= 0.0 {
-                        self.swing_start = Some(now);
+                PetEvent::PressL => self.add_glow(PawL::Down.layer(), "paw_l", now),
+                PetEvent::PressR(pose) => {
+                    self.add_glow(pose.layer(), "paw_r", now);
+                    if *pose == PawR::MouseClick {
+                        self.swing_click(now);
                     }
-                    self.last_move = Some(now);
                 }
+                PetEvent::MouseMove { dx, dy } => self.swing_move(*dx, *dy, now),
                 PetEvent::Cue(c) => self.fire(*c, None, now),
             }
         }
@@ -881,14 +907,38 @@ impl Animator {
         ok
     }
 
-    /// 끝난 run 정리, 보이는 full 이 바뀌었으면 크로스페이드 시작.
+    /// 끝난 run 정리, 보이는 full 이 바뀌었으면 몸 누르기 시작.
     fn tick(&mut self, now: Instant) {
         self.runs.retain(|r| r.end.is_none_or(|e| e > now));
         let cur = self.top(LayerMode::Full, now).map(|r| r.serial);
         if cur != self.shown_full.as_ref().map(|r| r.serial) {
-            self.prev_full = self.shown_full.take();
             self.shown_full = self.top(LayerMode::Full, now).cloned();
-            self.pose_fade = Some(now);
+            self.swap_start = Some(now);
+        }
+        let key = self.head_source(now);
+        self.note_head(key, now);
+    }
+
+    /// 장면이 바뀐 순간의 몸 누르기 (기준점 body_anchor).
+    fn swap_xf(&self, now: Instant) -> Xf {
+        let mut x = Xf::identity(self.body_anchor);
+        if let Some(s) = self.swap_start {
+            let p = progress(now, s, self.a.swap_ms);
+            if p < 1.0 {
+                let k = self.a.swap_squash * bump(p);
+                x.s = [1.0 + k, 1.0 - k];
+            }
+        }
+        x
+    }
+
+    /// 지금 그리는 머리가 바뀌었으면 팝을 시작한다 (머리는 섞지 않고 바로 교체).
+    fn note_head(&mut self, key: Option<(u64, String)>, now: Instant) {
+        if key != self.head_key {
+            if self.head_key.is_some() && key.is_some() {
+                self.pop_start = Some(now);
+            }
+            self.head_key = key;
         }
     }
 
@@ -917,7 +967,7 @@ impl Animator {
         r.full.as_ref().map(|f| f.at(r.local(now).unwrap_or(0)))
     }
 
-    /// 마우스 흔들기 세기 0~1: 시작할 때 swing_fade_ms 동안 커지고, 마지막 이동 뒤 swing_hold_ms 가 지나면 줄어든다.
+    /// 방향 없는 이동의 8자 왕복 세기 0~1: 시작할 때 swing_fade_ms 동안 커지고, 마지막 이동 뒤 swing_hold_ms 가 지나면 줄어든다.
     fn swing_env(&self, now: Instant) -> f32 {
         let (Some(start), Some(last)) = (self.swing_start, self.last_move) else { return 0.0 };
         let a = &self.a;
@@ -927,33 +977,185 @@ impl Animator {
         fade_in * fade_out
     }
 
-    fn swing_active(&self, now: Instant) -> bool {
-        self.swing.is_some() && matches!(self.state.paw_r, PawR::Mouse | PawR::MouseClick) && self.swing_env(now) > 0.0
+    fn mouse_pose(&self) -> bool {
+        self.rig.is_some() && matches!(self.state.paw_r, PawR::Mouse | PawR::MouseClick)
     }
 
-    /// 손과 마우스 이동 (캔버스 px). 패드 테두리가 접히지 않게 변형장이 허락한 최대 변위의 90% 안으로.
-    fn mouse_offset(&self, now: Instant) -> [f32; 2] {
-        let Some(sw) = self.swing.as_ref().filter(|_| self.swing_active(now)) else { return [0.0; 2] };
+    /// 손이 마우스를 떠나 돌아가는 중인가 (그동안은 마우스 자세를 그린다).
+    fn rig_leaving(&self, now: Instant) -> bool {
+        self.rig.is_some() && self.state.paw_r == PawR::Up && self.rig_out.is_some_and(|s| progress(now, s, RIG_OUT_MS) < 1.0)
+    }
+
+    /// 마우스 리그 그리기: 마우스, 그 위에 팔. 손은 마우스와 같이 움직이고, 잡으러 갈 때와 놓을 때는 어깨 쪽에서 오간다.
+    fn rig_cmds(&self, now: Instant) -> Vec<DrawCmd> {
+        let Some(r) = self.rig.as_ref() else { return Vec::new() };
+        let leaving = self.rig_leaving(now);
+        if !self.mouse_pose() && !leaving {
+            return Vec::new();
+        }
+        let moved = self.mouse_offset(now);
+        // 0 = 손이 몸 쪽에 접혀 있다, 1 = 마우스 위
+        let out = if leaving {
+            1.0 - ease_in_out(self.rig_out.map_or(1.0, |s| progress(now, s, RIG_OUT_MS)))
+        } else {
+            self.rig_in.map_or(1.0, |s| ease_out(progress(now, s, RIG_IN_MS)))
+        };
+        let fold = [(r.root[0] - r.tip[0]) * RIG_FOLD, (r.root[1] - r.tip[1]) * RIG_FOLD];
+        let hand = [moved[0] + fold[0] * (1.0 - out), moved[1] + fold[1] * (1.0 - out)];
+        let mouse = DrawCmd { offset: moved, ..DrawCmd::layer("fx/mouse") };
+        let arm = DrawCmd {
+            opacity: (0.4 + out * 3.0).min(1.0),
+            bend: Some(Bend { root: r.root, tip: r.tip, hand: r.hand, d: hand }),
+            ..DrawCmd::layer("fx/mouse_arm")
+        };
+        vec![mouse, arm]
+    }
+
+    fn swing_active(&self, now: Instant) -> bool {
+        self.mouse_pose() && (self.spring.moving() || self.swing_target(now) != [0.0; 2])
+    }
+
+    /// 손이 움직일 수 있는 범위 (캔버스 px, [[왼쪽, 오른쪽], [위, 아래]]): swing_pt 와 패드 안 범위 중 좁은 것.
+    /// "반응 줄이기" (cue_behaviors 꺼짐) 에서는 절반.
+    fn swing_limit(&self) -> [[f32; 2]; 2] {
+        let Some(r) = self.rig.as_ref() else { return [[0.0; 2]; 2] };
         let a = &self.a;
+        let calm = if self.cue_behaviors { 1.0 } else { CALM_SWING };
+        [0, 1].map(|k| {
+            let cap = (a.swing_pt[k] * self.px_per_pt).max(0.0);
+            [(r.range[k][0].min(0.0)).max(-cap) * calm, (r.range[k][1].max(0.0)).min(cap) * calm]
+        })
+    }
+
+    /// 손 목표 위치 (캔버스 px). 커서가 움직이는 동안은 커서 속도 방향, 방향이 없으면 8자 왕복, 멈추면 0.
+    /// 스프링이 목표를 넘쳐도 한도 안에 들도록 목표는 한도 / (1 + 넘침 비율) 까지.
+    fn swing_target(&self, now: Instant) -> [f32; 2] {
+        if !self.mouse_pose() {
+            return [0.0; 2];
+        }
+        let lim = self.swing_limit();
+        let cap = 1.0 / (1.0 + overshoot(self.a.swing_damping));
+        if let Some((v, until)) = self.spring.drive {
+            if now < until {
+                // 커서 속도 -1 ~ 1 을 그쪽 범위에 맞춘다 (패드 가운데가 아니어도 양쪽 끝에 같이 닿는다)
+                return [0, 1].map(|k| {
+                    let full = (self.a.swing_pt[k]).max(1e-3);
+                    let n = (v[k] / full).clamp(-1.0, 1.0);
+                    n * cap * if n < 0.0 { -lim[k][0] } else { lim[k][1] }
+                });
+            }
+        }
         let e = self.swing_env(now);
+        if e <= 0.0 {
+            return [0.0; 2];
+        }
         let t = self.swing_start.map_or(0.0, |s| now.saturating_duration_since(s).as_secs_f32());
-        let ph = t * a.swing_hz * std::f32::consts::TAU;
-        let amp = |k: usize| (a.swing_pt[k] * self.px_per_pt).min(sw.max_px[k] * 0.9);
-        [ph.sin() * amp(0) * e, (2.0 * ph).sin() * amp(1) * e]
+        let ph = t * self.a.swing_hz * std::f32::consts::TAU;
+        let amp = [0, 1].map(|k| (-lim[k][0]).min(lim[k][1]));
+        [ph.sin() * amp[0] * cap * e, (2.0 * ph).sin() * amp[1] * cap * e]
+    }
+
+    /// 마우스 이동: 방향이 있으면 커서 속도 x swing_gain 을 목표로 (pt), 없으면 8자 왕복.
+    fn swing_move(&mut self, dx: i32, dy: i32, now: Instant) {
+        self.step_spring(now);
+        if dx == 0 && dy == 0 {
+            if self.swing_env(now) <= 0.0 {
+                self.swing_start = Some(now);
+            }
+            self.last_move = Some(now);
+        } else {
+            // 이벤트 간격으로 속도를 잰다 (쓰로틀 33ms 안팎, 띄엄띄엄 오면 100ms 로 본다)
+            let dt = self.spring.last_dir.map_or(0.1, |t| now.saturating_duration_since(t).as_secs_f32()).clamp(0.016, 0.1);
+            let g = self.a.swing_gain / dt;
+            let cap = self.a.swing_pt;
+            let v = [(dx as f32 * g).clamp(-cap[0], cap[0]), (dy as f32 * g).clamp(-cap[1], cap[1])];
+            self.spring.drive = Some((v, now + Duration::from_millis(SWING_DRIVE_MS)));
+            self.spring.last_dir = Some(now);
+        }
+    }
+
+    /// 클릭: 손을 아래로 swing_click_pt 만큼 눌렀다 돌아오게 스프링에 충격을 준다.
+    fn swing_click(&mut self, now: Instant) {
+        if self.rig.is_none() || !self.cue_behaviors {
+            return;
+        }
+        self.step_spring(now);
+        let w = TAU_F * self.a.swing_stiffness;
+        let depth = (self.a.swing_click_pt * self.px_per_pt).min(self.swing_limit()[1][1]);
+        self.spring.vel[1] += depth / impulse_peak(w, self.a.swing_damping);
+    }
+
+    /// 스프링을 now 까지 고정 간격으로 진행한다 (부르는 간격과 상관없이 같은 결과).
+    fn step_spring(&mut self, now: Instant) {
+        let Some(mut t) = self.spring.t else {
+            self.spring.t = Some(now);
+            return;
+        };
+        if !self.mouse_pose() {
+            self.spring = Spring { t: Some(now), ..Spring::default() };
+            return;
+        }
+        let h = Duration::from_millis(SPRING_STEP_MS);
+        let hs = h.as_secs_f32();
+        let w = TAU_F * self.a.swing_stiffness;
+        let z = self.a.swing_damping;
+        let lim = self.swing_limit();
+        let tau = (self.a.swing_lean_ms as f32 / 1000.0).max(hs);
+        // 오래 멈춰 있었으면 한꺼번에 돌리지 않는다
+        if now.saturating_duration_since(t) > Duration::from_secs(2) && !self.spring.moving() {
+            self.spring.t = Some(now);
+            return;
+        }
+        while t + h <= now {
+            t += h;
+            let target = self.swing_target(t);
+            let sp = &mut self.spring;
+            for k in 0..2 {
+                let acc = w * w * (target[k] - sp.pos[k]) - 2.0 * z * w * sp.vel[k];
+                sp.vel[k] += acc * hs;
+                sp.pos[k] += sp.vel[k] * hs;
+                if sp.pos[k] < lim[k][0] || sp.pos[k] > lim[k][1] {
+                    sp.pos[k] = sp.pos[k].clamp(lim[k][0], lim[k][1]);
+                    sp.vel[k] = 0.0;
+                }
+                sp.lean[k] += (sp.pos[k] - sp.lean[k]) * hs / tau;
+            }
+            if target == [0.0; 2] && !sp.moving() {
+                *sp = Spring { t: None, drive: sp.drive, last_dir: sp.last_dir, ..Spring::default() };
+            }
+        }
+        self.spring.t = Some(t);
+    }
+
+    /// 손과 마우스 이동 (캔버스 px).
+    fn mouse_offset(&self, now: Instant) -> [f32; 2] {
+        if !self.swing_active(now) {
+            return [0.0; 2];
+        }
+        self.spring.pos
+    }
+
+    /// 손을 따라 늦게 기우는 몸 (캔버스 px).
+    fn mouse_lean(&self, now: Instant) -> [f32; 2] {
+        if !self.swing_active(now) {
+            return [0.0; 2];
+        }
+        let k = if self.cue_behaviors { self.a.swing_lean } else { 0.0 };
+        self.spring.lean.map(|v| v * k)
     }
 
     /// 변형 그리기 값. 변형장이 없거나 움직임이 없으면 None (그냥 그린다).
-    fn deform(&self, body: &Xf, head: &Xf, mouse: [f32; 2]) -> Option<Deform> {
+    fn deform(&self, body: &Xf, head: &Xf) -> Option<Deform> {
         let field = self.field.clone()?;
-        if body.is_identity() && head.is_identity() && mouse == [0.0; 2] {
+        if body.is_identity() && head.is_identity() {
             return None;
         }
-        Some(Deform { field, body: (*body).into(), head: (*head).into(), mouse })
+        Some(Deform { field, body: (*body).into(), head: (*head).into() })
     }
 
-    fn add_glow(&mut self, pose_layer: &str, now: Instant) {
+    fn add_glow(&mut self, pose_layer: &str, side: &'static str, now: Instant) {
         if let Some(&c) = self.tips.get(pose_layer) {
-            self.glows.push(Glow { center: c, start: now });
+            self.glows.push(Glow { center: c, start: now, side });
         }
     }
 
@@ -1003,46 +1205,54 @@ impl Animator {
     /// 이 시각에 그릴 목록.
     pub fn frame(&mut self, now: Instant) -> Frame {
         self.tick(now);
+        self.step_spring(now);
         self.glows.retain(|g| progress(now, g.start, self.a.glow_ms) < 1.0);
         let a = &self.a;
         let pt = self.px_per_pt;
         let st = self.state;
-
-        // 특수 포즈 투명도
-        let pose_p = self.pose_fade.map(|s| ease_in_out(progress(now, s, a.pose_fade_ms))).unwrap_or(1.0);
-        let shown = self.top(LayerMode::Full, now);
-        let (full_run, full_alpha) = match (shown, &self.prev_full) {
-            (Some(r), _) => (Some(r), pose_p),
-            (None, Some(r)) => (Some(r), 1.0 - pose_p),
-            (None, None) => (None, 0.0),
-        };
+        // 장면은 섞지 않고 바로 교체한다. 바뀐 순간 몸을 살짝 눌렀다 편다
+        let full_run = self.top(LayerMode::Full, now);
+        let swap = self.swap_xf(now);
 
         let mut cmds = Vec::new();
-        if full_alpha < 1.0 {
+        if full_run.is_none() {
             // 얹는 behavior: 몸/머리 움직임, 머리 바꾸기, 소품
             let ov = self.top(LayerMode::Overlay, now).and_then(|r| Some((r, self.behavior(r)?, r.local(now)? as f32, r.len_ms().map(|l| l as f32))));
-            let body = ov.map_or(Xf::identity(self.body_anchor), |(_, b, lt, len)| self.body_xf(&b.motion, &b.fx, lt, len));
+            let mut body = with_swap(&swap, ov.map_or(Xf::identity(self.body_anchor), |(_, b, lt, len)| self.body_xf(&b.motion, &b.fx, lt, len)));
+            // 마우스를 흔들면 몸이 손 쪽으로 늦게 기운다
+            let lean = self.mouse_lean(now);
+            body.offset = [body.offset[0] + lean[0], body.offset[1] + lean[1]];
             let head_m = ov.map_or(Xf::identity(self.head_anchor), |(_, b, lt, len)| {
                 motion_xf(&b.motion, &b.fx, MotionTarget::Head, lt, len, self.head_anchor, pt)
             });
-            // 키 빛
+            // 키 빛: 누른 앞발의 캐릭터 픽셀 밖에만 (앞발 밑에서 키가 빛나는 것처럼)
+            let paw_l = self.layers.resolve(st.paw_l.layer());
+            // 손이 마우스를 떠나는 동안은 마우스 자세 바탕 위에 돌아가는 팔을 그린다
+            let rig = self.rig_cmds(now);
+            let paw_r = if self.rig_leaving(now) { self.layers.resolve("paw_r/mouse") } else { self.layers.resolve(st.paw_r.layer()) };
             let mut glows = Vec::new();
+            // 마우스 빛은 흔들리고 눌리는 마우스를 따라간다
+            let mouse_moved = self.mouse_offset(now);
             for g in &self.glows {
                 let p = ease_out(progress(now, g.start, a.glow_ms));
                 let r = (a.glow_r0_pt + (a.glow_r1_pt - a.glow_r0_pt) * p) * pt;
+                let paw = if g.side == "paw_l" { &paw_l } else { &paw_r };
+                let center = if g.side == "paw_r" { [g.center[0] + mouse_moved[0], g.center[1] + mouse_moved[1]] } else { g.center };
                 glows.push(DrawCmd {
-                    kind: DrawKind::Glow { center: g.center, radius: r, color: a.glow_color },
+                    kind: DrawKind::Glow { center, radius: r, color: a.glow_color },
                     opacity: 1.0 - p,
-                    anchor: g.center,
+                    anchor: center,
+                    mask: paw.as_deref().map(char_mask_name),
                     ..DrawCmd::layer("")
                 });
             }
             // 머리
-            let mut scale = 1.0;
+            let (mut scale, mut lift) = (1.0, 0.0);
             if let Some(s) = self.pop_start {
                 let p = progress(now, s, a.pop_ms);
                 if p < 1.0 {
                     scale = 1.0 + (a.pop_scale - 1.0) * bump(p);
+                    lift = -a.pop_pt * pt * bump(p);
                 }
             }
             let breathe = if self.breathing && self.is_still(now) {
@@ -1050,59 +1260,31 @@ impl Animator {
                 (t * std::f32::consts::TAU / a.breathe_period_s).sin() * a.breathe_pt * pt
             } else {
                 0.0
-            };
+            } + lift;
             // 머리 변환: behavior 머리 움직임 + 숨쉬기 + 팝 (변형장에서는 머리 가중치만큼)
             let pop = Xf { anchor: self.head_anchor, offset: [0.0, breathe], s: [scale; 2] };
             let head_total = head_m.then_of(&pop);
-            let def = self.deform(&body, &head_total, self.mouse_offset(now));
-            let mut head_cur = self.layers.resolve(self.head_layer(st.head, now));
-            // 머리 바꾸기: 시작/끝 head_fade_ms 동안 원래 머리와 섞는다
-            let mut swap: Option<(String, f32)> = None;
-            if let Some((_, b, lt, len)) = ov {
-                if let Some(h) = &b.head {
-                    let fr = h.frames();
-                    let name = fr[(lt as u64 / h.frame_ms.max(1)) as usize % fr.len()];
-                    let fade = a.head_fade_ms.max(1) as f32;
-                    let w = ease_in_out(lt / fade) * len.map_or(1.0, |l| ease_in_out((l - lt) / fade));
-                    swap = self.layers.resolve(name).map(|n| (n, w));
-                }
-            }
+            let def = self.deform(&body, &head_total);
+
+            // 머리: behavior 의 머리 바꾸기, 선글라스 낙하 중 이전 머리, 상태 머리 (섞지 않고 바로 교체, 바뀔 때 팝)
             let mut fx: Option<DrawCmd> = None;
-            let head_kind = if let Some(start) = self.sun_drop {
-                // 1) 이전 머리 위로 선글라스가 내려옴 2) 머리를 head/sunglasses 로 크로스페이드, 선글라스는 사라짐
+            if let Some(start) = self.sun_drop {
+                // 이전 머리 위로 선글라스가 내려오고, 닿으면 머리를 head/sunglasses 로 바꾼다
                 let drop_p = progress(now, start, a.sunglasses_drop_ms);
-                let prev = self.layers.resolve(&self.sun_prev_head);
-                let mut fx_cmd = DrawCmd::layer("fx/sunglasses");
-                fx_cmd.anchor = self.head_anchor;
                 if drop_p < 1.0 {
+                    let mut fx_cmd = DrawCmd::layer("fx/sunglasses");
+                    fx_cmd.anchor = self.head_anchor;
                     fx_cmd.opacity = ease_out(drop_p);
                     fx_cmd.offset = [0.0, -(1.0 - ease_out_back(drop_p)) * a.sunglasses_drop_pt * pt];
                     fx = Some(fx_cmd);
-                    prev.map(|name| DrawKind::Layer { name })
-                } else {
-                    let fade_start = start + Duration::from_millis(a.sunglasses_drop_ms);
-                    let t = ease_in_out(progress(now, fade_start, a.head_fade_ms));
-                    if t < 1.0 {
-                        fx_cmd.opacity = 1.0 - t;
-                        fx = Some(fx_cmd);
-                    }
-                    mix_or_layer(prev, head_cur, t)
                 }
-            } else if let Some((name, w)) = swap {
-                mix_or_layer(head_cur.take(), Some(name), w)
-            } else if let Some(f) = &self.head_fade {
-                let t = ease_in_out(progress(now, f.start, a.head_fade_ms));
-                mix_or_layer(self.layers.resolve(&f.from), head_cur, t)
-            } else {
-                head_cur.map(|name| DrawKind::Layer { name })
-            };
+            }
+            let head_kind = self.head_now(now).map(|name| DrawKind::Layer { name });
             let head_xf = body.then_of(&head_m);
             if let Some(def) = &def {
                 // 변형장: 바탕/앞발/머리를 같은 변형으로 그린다 (몸/머리 움직임과 마우스가 이음매 없이)
-                let paw_l = self.layers.resolve(st.paw_l.layer());
-                let paw_r = self.layers.resolve(st.paw_r.layer());
                 let mut char_cmds = vec![DrawCmd::layer("base")];
-                for (l, g) in [(paw_l, "paw_l"), (paw_r, "paw_r")] {
+                for (l, g) in [(paw_l.clone(), "paw_l"), (paw_r.clone(), "paw_r")] {
                     if let Some(l) = l {
                         char_cmds.push(DrawCmd { mask: self.masks.get(g).cloned(), ..DrawCmd::layer(&l) });
                     }
@@ -1110,11 +1292,17 @@ impl Animator {
                 if let Some(kind) = head_kind {
                     char_cmds.push(DrawCmd { kind, mask: self.masks.get("head").cloned(), ..DrawCmd::layer("") });
                 }
+                // 마우스와 팔도 같은 변형으로 (몸이 기울면 어깨가 따라간다)
+                char_cmds.extend(rig);
                 for mut c in char_cmds {
                     c.deform = Some(def.clone());
                     cmds.push(c);
                 }
-                cmds.extend(glows);
+                // 키 빛도 같은 변형으로 앞발 마스크를 읽는다 (움직이는 앞발 자리와 맞게)
+                cmds.extend(glows.into_iter().map(|mut g| {
+                    g.deform = g.mask.as_ref().map(|_| def.clone());
+                    g
+                }));
                 if let Some(mut f) = fx {
                     body.then_of(&head_total).apply(&mut f);
                     cmds.push(f);
@@ -1125,7 +1313,7 @@ impl Animator {
                 if let Some(l) = self.layers.resolve(st.paw_l.layer()) {
                     cmds.extend(self.paw_cmds(&l, "paw_l", &body));
                 }
-                if let Some(l) = self.layers.resolve(st.paw_r.layer()) {
+                if let Some(l) = paw_r {
                     cmds.extend(self.paw_cmds(&l, "paw_r", &body));
                 }
                 cmds.extend(glows);
@@ -1141,6 +1329,7 @@ impl Animator {
                     head_xf.apply(&mut f);
                     cmds.push(f);
                 }
+                cmds.extend(rig);
             }
             cmds.extend(self.prop_cmds(None, 1.0, now));
             if let Some((_, b, lt, len)) = ov {
@@ -1148,13 +1337,55 @@ impl Animator {
             }
         }
         if let Some(r) = full_run {
-            if full_alpha > 0.0 {
-                cmds.extend(self.full_cmds(r, full_alpha, now));
-                let shown = r.full.as_ref().map(|f| f.kind(r.local(now).unwrap_or(0)));
-                cmds.extend(self.prop_cmds(shown.as_ref(), full_alpha, now));
-            }
+            cmds.extend(self.full_cmds(r, &swap, now));
+            let shown = r.full.as_ref().map(|f| f.kind(r.local(now).unwrap_or(0)));
+            cmds.extend(self.prop_cmds(shown.as_ref(), 1.0, now));
         }
         Frame { cmds }
+    }
+
+    /// 지금 그릴 머리 레이어 (선글라스 낙하 중이면 이전 머리, behavior 머리 바꾸기, 상태 머리 순).
+    fn head_now(&self, now: Instant) -> Option<String> {
+        if let Some(start) = self.sun_drop {
+            if progress(now, start, self.a.sunglasses_drop_ms) < 1.0 {
+                return self.layers.resolve(&self.sun_prev_head);
+            }
+        }
+        if let Some((b, lt)) = self.head_run(now) {
+            if let Some(h) = &b.head {
+                let fr = h.frames();
+                return self.layers.resolve(fr[(lt / h.frame_ms.max(1)) as usize % fr.len()]);
+            }
+        }
+        self.layers.resolve(self.head_layer(self.state.head, now))
+    }
+
+    /// 머리를 바꾸는 overlay behavior (장면이 보이면 None).
+    fn head_run(&self, now: Instant) -> Option<(&Behavior, u64)> {
+        if self.top(LayerMode::Full, now).is_some() {
+            return None;
+        }
+        let r = self.top(LayerMode::Overlay, now)?;
+        let b = self.behavior(r)?;
+        b.head.as_ref()?;
+        Some((b, r.local(now)?))
+    }
+
+    /// 지금 머리의 출처: 장면이면 None, behavior 머리면 (run 번호, ""), 선글라스 낙하 중이면 (0, 이전 머리), 아니면 (0, 상태 머리).
+    /// 교대 프레임과 귀 흔들기는 출처가 같아 팝이 나지 않는다.
+    fn head_source(&self, now: Instant) -> Option<(u64, String)> {
+        if self.top(LayerMode::Full, now).is_some() {
+            return None;
+        }
+        if let Some(start) = self.sun_drop {
+            if progress(now, start, self.a.sunglasses_drop_ms) < 1.0 {
+                return Some((0, self.sun_prev_head.clone()));
+            }
+        }
+        if let Some(r) = self.top(LayerMode::Overlay, now).filter(|r| self.behavior(r).is_some_and(|b| b.head.is_some())) {
+            return Some((r.serial, String::new()));
+        }
+        Some((0, self.state.head.layer().to_string()))
     }
 
     /// behavior 소품들 (fx:<이름> 움직임 포함).
@@ -1172,22 +1403,23 @@ impl Animator {
     }
 
     /// 장면 그리기: 프레임(블렌드), 몸/머리 움직임과 숨쉬기(마스크 안을 옮김), 소품.
-    fn full_cmds(&self, r: &Run, alpha: f32, now: Instant) -> Vec<DrawCmd> {
+    fn full_cmds(&self, r: &Run, swap: &Xf, now: Instant) -> Vec<DrawCmd> {
         let Some(f) = &r.full else { return Vec::new() };
+        let alpha = 1.0;
         let pt = self.px_per_pt;
         let el = r.local(now).unwrap_or(0);
         let lt = el as f32;
         let len = r.len_ms().map(|l| l as f32);
         let motion: &[Motion] = self.behavior(r).map_or(&[], |b| &b.motion);
         let kind = f.kind(el);
-        let body = self.body_xf(motion, &f.fx, lt, len);
+        let body = with_swap(swap, self.body_xf(motion, &f.fx, lt, len));
         let s = f.breath(el);
         let bob = f.breathe.as_ref().map_or(0.0, |b| -s * b.pt * pt);
         if self.field.is_some() {
             let mut head = motion_xf(motion, &f.fx, MotionTarget::Head, lt, len, self.head_anchor, pt);
             head.offset[1] += bob;
             let mut c = DrawCmd { kind: kind.clone(), opacity: alpha, ..DrawCmd::layer("") };
-            c.deform = self.deform(&body, &head, [0.0; 2]);
+            c.deform = self.deform(&body, &head);
             let mut v = vec![c];
             v.extend(self.behavior_fx(motion, &f.fx, lt, len, |x| f.on_weight(&x.on, el), bob, alpha));
             return v;
@@ -1211,28 +1443,23 @@ impl Animator {
         let a = &self.a;
         let live = |s: Option<Instant>, d: u64| s.is_some_and(|s| progress(now, s, d) < 1.0);
         self.swing_active(now)
+            || (self.mouse_pose() && live(self.rig_in, RIG_IN_MS))
+            || self.rig_leaving(now)
             || live(self.pop_start, a.pop_ms)
-            || self.head_fade.as_ref().is_some_and(|f| progress(now, f.start, a.head_fade_ms) < 1.0)
-            || self.pose_fade.is_some_and(|s| progress(now, s, a.pose_fade_ms) < 1.0)
-            || live(self.sun_drop, a.sunglasses_drop_ms + a.head_fade_ms)
+            || live(self.swap_start, a.swap_ms)
+            || live(self.sun_drop, a.sunglasses_drop_ms)
             || !self.glows.iter().all(|g| progress(now, g.start, a.glow_ms) >= 1.0)
             || self.overlay_moving(now)
             || self.tap_active(now)
     }
 
-    /// 보이는 overlay 가 움직이는 중인가 (움직임/소품, 또는 머리 바꾸기가 섞이는 중).
+    /// 보이는 overlay 가 움직이는 중인가 (움직임/소품).
     fn overlay_moving(&self, now: Instant) -> bool {
         if self.top(LayerMode::Full, now).is_some() {
             return false;
         }
         let Some(r) = self.top(LayerMode::Overlay, now) else { return false };
-        let Some(b) = self.behavior(r) else { return false };
-        if b.moves() {
-            return true;
-        }
-        let lt = r.local(now).unwrap_or(0);
-        let fade = self.a.head_fade_ms;
-        lt < fade || r.len_ms().is_some_and(|l| l.saturating_sub(lt) < fade)
+        self.behavior(r).is_some_and(|b| b.moves())
     }
 
     /// 아무 연출도 없는 상태 (숨쉬기 대상).
@@ -1284,12 +1511,56 @@ impl Animator {
     }
 }
 
-fn mix_or_layer(a: Option<String>, b: Option<String>, t: f32) -> Option<DrawKind> {
-    match (a, b) {
-        (Some(a), Some(b)) if a != b && t < 1.0 => Some(DrawKind::Mix { a, b, t }),
-        (_, Some(b)) => Some(DrawKind::Layer { name: b }),
-        _ => None,
+/// 몸 변환에 장면 바꾸기 누르기를 덧씌운다 (누르기가 없으면 그대로).
+const TAU_F: f32 = std::f32::consts::TAU;
+/// 스프링 진행 간격 (ms).
+const SPRING_STEP_MS: u64 = 2;
+/// 방향 있는 이동 뒤 이만큼 새 이동이 없으면 커서가 멈춘 것으로 보고 손을 제자리로 (쓰로틀 33ms 의 두세 배).
+const SWING_DRIVE_MS: u64 = 80;
+/// "반응 줄이기" 에서 손 흔들기 폭 배율 (몸 기울기, 클릭 눌림은 끈다).
+const CALM_SWING: f32 = 0.5;
+/// 손이 마우스를 잡으러 가는 시간, 놓고 돌아가는 시간 (ms).
+const RIG_IN_MS: u64 = 130;
+const RIG_OUT_MS: u64 = 110;
+/// 접힌 손의 자리: 손에서 어깨 쪽으로 이만큼 (팔 길이 대비).
+const RIG_FOLD: f32 = 0.55;
+
+/// 손 스프링 상태 (캔버스 px).
+#[derive(Debug, Clone, Copy, Default)]
+struct Spring {
+    pos: [f32; 2],
+    vel: [f32; 2],
+    /// 몸 기울기용으로 늦게 따라가는 손 위치.
+    lean: [f32; 2],
+    /// 여기까지 진행했다.
+    t: Option<Instant>,
+    /// 커서 속도로 정한 목표 (pt) 와 유지 시각.
+    drive: Option<([f32; 2], Instant)>,
+    last_dir: Option<Instant>,
+}
+
+impl Spring {
+    fn moving(&self) -> bool {
+        self.pos.iter().chain(&self.vel).chain(&self.lean).any(|v| v.abs() > 0.05)
     }
+}
+
+/// 감쇠 스프링이 목표로 갈 때 넘치는 비율 (감쇠비 z).
+fn overshoot(z: f32) -> f32 {
+    let z = z.clamp(0.0, 0.999);
+    (-z * std::f32::consts::PI / (1.0 - z * z).sqrt()).exp()
+}
+
+/// 제자리에서 속도 1 의 충격을 받았을 때 최대 변위 (고유 각진동수 w, 감쇠비 z).
+fn impulse_peak(w: f32, z: f32) -> f32 {
+    let z = z.clamp(0.0, 0.999);
+    let wd = w * (1.0 - z * z).sqrt();
+    let t = ((1.0 - z * z).sqrt() / z.max(1e-3)).atan() / wd;
+    (-z * w * t).exp() * (wd * t).sin() / wd
+}
+
+fn with_swap(swap: &Xf, body: Xf) -> Xf {
+    if swap.is_identity() { body } else { swap.then_of(&body) }
 }
 
 /// 숨쉬기 위상은 앱 시작 이후 경과로 계산 (재현성을 위해 고정 원점).

@@ -2,6 +2,7 @@
 
 pub mod anim;
 pub mod config;
+pub mod crop;
 pub mod desk;
 pub mod input;
 pub mod keyecho;
@@ -41,7 +42,7 @@ pub fn all_states() -> Vec<(String, PetState, bool)> {
     let mut v = Vec::new();
     for head in Head::ALL {
         for paw_l in [PawL::Up, PawL::Down] {
-            for paw_r in [PawR::Up, PawR::Down, PawR::Center, PawR::Mouse, PawR::MouseClick] {
+            for paw_r in [PawR::Up, PawR::Down, PawR::Mouse, PawR::MouseClick] {
                 let name = format!("{}__{}__{}", head.layer().replace('/', "-"), paw_l.layer().replace('/', "-"), paw_r.layer().replace('/', "-"));
                 v.push((name, PetState { paw_l, paw_r, head, pose: None }, false));
             }
@@ -94,6 +95,8 @@ pub fn still_manifest(m: &Manifest) -> Manifest {
         sc.breathe = None;
     }
     s.anim.pop_scale = 1.0;
+    s.anim.pop_pt = 0.0;
+    s.anim.swap_squash = 0.0;
     s.anim.swing_pt = [0.0; 2];
     s.anim.breathe_pt = 0.0;
     s
@@ -141,6 +144,42 @@ pub fn is_blend(f: &Frame) -> bool {
     })
 }
 
+/// 섞인 그림을 한 장으로 고른 같은 프레임 (움직임 QA T1 의 기준): 크로스페이드는 더 많이 보이는 쪽,
+/// 반투명한 캐릭터/장면/소품 레이어는 반 넘게 보이면 불투명하게, 아니면 뺀다.
+pub fn unblend(f: &Frame) -> Frame {
+    use crate::anim::DrawKind;
+    let fading = |c: &crate::anim::DrawCmd| match &c.kind {
+        DrawKind::Mix { .. } => true,
+        DrawKind::Layer { name } => ["base", "full/", "paw_", "head/", "prop/"].iter().any(|p| name.starts_with(p)),
+        DrawKind::Glow { .. } => false,
+    };
+    let mut out = Frame::default();
+    for c in &f.cmds {
+        let mut c = c.clone();
+        if fading(&c) && c.opacity < 0.999 {
+            if c.opacity < 0.5 {
+                continue;
+            }
+            c.opacity = 1.0;
+        }
+        if let DrawKind::Mix { a, b, t } = &c.kind {
+            c.kind = DrawKind::Layer { name: if *t < 0.5 { a.clone() } else { b.clone() } };
+        }
+        out.cmds.push(c);
+    }
+    out
+}
+
+/// 키 빛을 뺀 같은 프레임 (움직임 QA T4 의 기준).
+pub fn without_glow(f: &Frame) -> Frame {
+    Frame { cmds: f.cmds.iter().filter(|c| !matches!(c.kind, crate::anim::DrawKind::Glow { .. })).cloned().collect() }
+}
+
+/// 키 빛이 있는 프레임인가.
+pub fn has_glow(f: &Frame) -> bool {
+    f.cmds.iter().any(|c| matches!(c.kind, crate::anim::DrawKind::Glow { .. }))
+}
+
 /// `--scenario` 이름별 입력: demo(기본, [`timeline_inputs`]), idle(키 하나 뒤 입력 없음), milestone(키를 빠르게 계속),
 /// wake(쉬다가 다시 치기), burst(가끔 몰아치기), levels(천천히 과열까지 올렸다 식히기), ambient(키 하나 뒤 오래 가만히, --secs 200 쯤),
 /// keys(Enter/Backspace/Space 등 이름 있는 키).
@@ -154,10 +193,27 @@ pub fn scenario_inputs(name: &str) -> Option<Vec<(u64, crate::input::Input)>> {
         "wake" => Some(typing(300, 2_000, 200).chain(typing(18_000, 22_000, 200)).collect()),
         "burst" => Some((0..4u64).flat_map(|r| typing(500 + r * 3_000, 1_500 + r * 3_000, 70)).collect()),
         "levels" => Some(typing(300, 9_000, 75).chain(typing(9_000, 12_000, 300)).collect()),
-        "mouse" => Some(typing(300, 1_500, 120).chain((0..60u64).map(|k| (2_000 + k * 50, Input::MouseMove))).chain([(3_200, Input::MouseClick), (4_200, Input::MouseClick)]).collect()),
+        "mouse" => Some(mouse_inputs(typing(300, 1_500, 120).collect())),
         "keys" => Some([36u16, 51, 51, 51, 49, 48, 53, 117, 36].iter().enumerate().map(|(i, &c)| (300 + i as u64 * 1_500, Input::Key(c))).collect()),
         _ => None,
     }
+}
+
+/// 마우스 시나리오: 타이핑 뒤 2~3.5초 커서를 좌우로 흔들고 (33ms 마다, 250ms 마다 방향 바꿈) 멈춘다 (넘쳤다 돌아옴),
+/// 4초와 4.6초에 클릭, 5~5.6초는 방향 없는 이동 (스크롤).
+fn mouse_inputs(mut v: Vec<(u64, crate::input::Input)>) -> Vec<(u64, crate::input::Input)> {
+    use crate::input::Input;
+    let mut t = 2_000;
+    while t < 3_500 {
+        let right = ((t - 2_000) / 250) % 2 == 0;
+        let dy = if ((t - 2_000) / 500) % 2 == 0 { 6 } else { -6 };
+        v.push((t, Input::MouseMove { dx: if right { 40 } else { -40 }, dy }));
+        t += 33;
+    }
+    v.push((4_000, Input::MouseClick));
+    v.push((4_600, Input::MouseClick));
+    v.extend((0..12u64).map(|k| (5_000 + k * 50, Input::MOVE)));
+    v
 }
 
 /// 참고 영상(PLAN 1.2)을 흉내 낸 입력 시나리오: (시각 ms, 입력).
@@ -176,7 +232,9 @@ pub fn timeline_inputs() -> Vec<(u64, crate::input::Input)> {
     }
     // 8 ~ 11s: 마우스 이동과 클릭
     for k in 0..20 {
-        v.push((8_200 + k * 100, Input::MouseMove));
+        // 3번씩 오른쪽, 왼쪽으로 (커서 이동량 pt)
+        let dx = if (k / 3) % 2 == 0 { 60 } else { -60 };
+        v.push((8_200 + k * 100, Input::MouseMove { dx, dy: 0 }));
     }
     v.push((9_000, Input::MouseClick));
     v.push((9_600, Input::MouseClick));

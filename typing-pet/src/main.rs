@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use typing_pet::anim::Animator;
 use typing_pet::config::{self, Config, Manifest};
+use typing_pet::crop::{self, Handle, Rect};
 use typing_pet::input::{self, Cursor, Input};
 use typing_pet::keyecho::{self, KeyEcho};
 use typing_pet::pet::{Pet, PetState};
@@ -18,7 +19,19 @@ use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS, WindowAttributesExtMacOS};
-use winit::window::{Window, WindowId, WindowLevel};
+use winit::window::{CursorIcon, Window, WindowId, WindowLevel};
+
+/// 크기 조절 틀이 켜져 있는 동안의 상태.
+struct Crop {
+    /// 틀을 켠 순간의 자리 (Esc 로 되돌린다).
+    orig: Rect,
+    /// 손잡이를 잡고 끄는 중: (손잡이, 잡은 순간의 자리).
+    grab: Option<(Handle, Rect)>,
+    /// 커서 아래 손잡이 (커서 모양용).
+    over: Option<Handle>,
+    /// 마지막 클릭 시각 (두 번 누르면 끝낸다).
+    last_click: Option<Instant>,
+}
 
 #[derive(Debug, Clone)]
 enum AppEvent {
@@ -105,6 +118,8 @@ struct App {
     dragging: bool,
     /// 마지막 커서 위치 (창 안 0~1). 책상 소품을 눌렀는지 볼 때 쓴다.
     cursor_uv: (f64, f64),
+    /// 캐릭터를 누른 순간의 창 위치. 뗄 때 거의 안 움직였으면 끌기가 아니라 클릭으로 본다.
+    press_pos: Option<winit::dpi::PhysicalPosition<i32>>,
     /// 끌기 전에 맨 앞에 있던 앱. 끌고 나면 포커스를 돌려준다.
     prev_app: Option<objc2::rc::Retained<objc2_app_kit::NSRunningApplication>>,
     tap_ok: bool,
@@ -116,11 +131,20 @@ struct App {
     settle_at: Option<Instant>,
     /// 벤치마크: 이 시각까지 계속 그린다 (TYPING_PET_BENCH=초).
     bench_until: Option<Instant>,
+    /// 크기 조절 틀 (메뉴의 "크기 조절").
+    crop: Option<Crop>,
 }
 
 impl App {
-    fn new(cfg: Config, mut manifest: Manifest, proxy: EventLoopProxy<AppEvent>) -> Self {
+    fn new(mut cfg: Config, mut manifest: Manifest, proxy: EventLoopProxy<AppEvent>) -> Self {
         let now = Instant::now();
+        // 목록에서 빠진 직군 (예: 학생) 을 고른 설정이면 기본 직군으로 바꿔 저장
+        if manifest.catalog.fix_job(&mut cfg.job, typing_pet::config::DEFAULT_JOB) {
+            log::info!("없는 직군이라 {} 로 바꿈", typing_pet::config::DEFAULT_JOB);
+            if let Err(e) = cfg.save() {
+                log::warn!("설정 저장 실패: {e}");
+            }
+        }
         manifest.job = cfg.job.clone();
         let mut pet = Pet::new(manifest.timing.clone(), manifest.keys.clone(), now);
         let mut anim = Animator::new(&manifest, typing_pet::anim::REF_SIZE_PT, now);
@@ -140,6 +164,7 @@ impl App {
             hover: false,
             dragging: false,
             cursor_uv: (-1.0, -1.0),
+            press_pos: None,
             prev_app: None,
             tap_ok: false,
             next_tap_retry: None,
@@ -147,6 +172,7 @@ impl App {
             last_frame: None,
             frames: 0,
             settle_at: None,
+            crop: None,
             bench_until: std::env::var("TYPING_PET_BENCH")
                 .ok()
                 .and_then(|v| v.parse::<f64>().ok())
@@ -288,8 +314,29 @@ impl App {
     fn on_cursor(&mut self, c: Cursor) {
         match c {
             Cursor::Up => {
+                if let Some(c) = &mut self.crop {
+                    if c.grab.take().is_some() {
+                        self.save();
+                        return;
+                    }
+                }
                 if self.dragging {
                     self.dragging = false;
+                    let moved = match (self.press_pos.take(), self.window.as_ref().and_then(|w| w.outer_position().ok())) {
+                        (Some(a), Some(b)) => (a.x - b.x).abs().max((a.y - b.y).abs()),
+                        _ => i32::MAX,
+                    };
+                    // 크기 조절 중에는 두 번 누르면 끝낸다
+                    if let Some(c) = &mut self.crop {
+                        let now = Instant::now();
+                        let double = moved <= 3 && c.last_click.is_some_and(|t| now.duration_since(t) < Duration::from_millis(450));
+                        c.last_click = (moved <= 3).then_some(now);
+                        self.save();
+                        if double {
+                            self.set_crop(false);
+                        }
+                        return;
+                    }
                     self.save();
                     if let Some(app) = self.prev_app.take() {
                         mac::activate(&app);
@@ -297,6 +344,10 @@ impl App {
                 }
             }
             Cursor::Move(x, y) => {
+                if self.crop.is_some() {
+                    self.crop_cursor(x, y);
+                    return;
+                }
                 if self.dragging {
                     return;
                 }
@@ -417,6 +468,9 @@ impl App {
     fn on_tray(&mut self, el: &ActiveEventLoop, a: TrayAction) {
         match a {
             TrayAction::ToggleVisible => {
+                if self.cfg.visible {
+                    self.set_crop(false);
+                }
                 self.cfg.visible = !self.cfg.visible;
                 if let Some(w) = &self.window {
                     w.set_visible(self.cfg.visible);
@@ -440,7 +494,7 @@ impl App {
                 self.request_redraw();
                 self.save();
             }
-            TrayAction::Size(s) => self.set_size(s),
+            TrayAction::ToggleResize => self.set_crop(self.crop.is_none()),
             TrayAction::Job(i) => {
                 let job = self.tray.as_ref().and_then(|t| t.job(i)).map(str::to_string);
                 self.cfg.job = job;
@@ -465,8 +519,12 @@ impl App {
                 el.exit();
             }
         }
+        self.sync_tray();
+    }
+
+    fn sync_tray(&self) {
         if let Some(t) = &self.tray {
-            t.sync(&self.cfg);
+            t.sync(&self.cfg, self.crop.is_some());
         }
     }
 
@@ -527,25 +585,103 @@ impl App {
         if (s - old).abs() < 0.5 {
             return;
         }
-        let old_pad = self.pad();
+        let Some(r) = self.rect() else { return };
+        self.set_rect(Rect { x: r.x + (old - s) / 2.0, y: r.y + (old - s), s });
+    }
+
+    /// 지금 캐릭터 정사각형 자리 (화면 pt). 창은 그 위로 띠만큼 더 크다.
+    fn rect(&self) -> Option<Rect> {
+        let w = self.window.as_ref()?;
+        let p = w.outer_position().ok()?.to_logical::<f64>(w.scale_factor());
+        Some(Rect { x: p.x, y: p.y + self.pad(), s: self.cfg.size })
+    }
+
+    /// 캐릭터 정사각형을 이 자리/크기로 (창은 띠만큼 위에 둔다).
+    fn set_rect(&mut self, r: Rect) {
+        let s = config::clamp_size(r.s);
+        if self.rect().is_some_and(|o| (o.s - s).abs() < 0.5 && (o.x - r.x).abs() < 0.5 && (o.y - r.y).abs() < 0.5) {
+            return;
+        }
         self.cfg.size = s;
         self.anim.set_size_pt(self.manifest.canvas, s as f32);
         let pad = self.pad();
         if let Some(w) = &self.window {
-            if let Ok(p) = w.outer_position() {
-                let p = p.to_logical::<f64>(w.scale_factor());
-                // 캐릭터 정사각형 좌상단 기준으로 계산하고, 창은 띠만큼 위에 둔다
-                let (x, y) = (p.x + (old - s) / 2.0, p.y + old_pad + (old - s));
-                w.set_outer_position(LogicalPosition::new(x, y - pad));
-                self.cfg.position = Some((x, y));
-            }
+            w.set_outer_position(LogicalPosition::new(r.x, r.y - pad));
             let _ = w.request_inner_size(LogicalSize::new(s, s + pad));
+            self.cfg.position = Some((r.x, r.y));
         }
         self.settle_at = Some(Instant::now() + Duration::from_millis(300));
-        if let Some(t) = &self.tray {
-            t.sync(&self.cfg);
-        }
+        self.sync_tray();
         self.request_redraw();
+    }
+
+    /// 크기 조절 틀 켜기/끄기. 켜져 있는 동안 창 전체가 클릭을 받고 틀과 손잡이를 그린다.
+    fn set_crop(&mut self, on: bool) {
+        if on == self.crop.is_some() {
+            return;
+        }
+        let Some(w) = self.window.clone() else { return };
+        if on {
+            let Some(orig) = self.rect() else { return };
+            if !self.cfg.visible {
+                self.cfg.visible = true;
+                w.set_visible(true);
+            }
+            self.crop = Some(Crop { orig, grab: None, over: None, last_click: None });
+            if !self.hover {
+                self.prev_app = mac::frontmost_app();
+            }
+            self.hover = true;
+            let _ = w.set_cursor_hittest(true);
+        } else {
+            self.crop = None;
+            self.hover = false;
+            let _ = w.set_cursor_hittest(false);
+            w.set_cursor(CursorIcon::Default);
+            self.save();
+            if let Some(app) = self.prev_app.take() {
+                mac::activate(&app);
+            }
+        }
+        if let Some(g) = &mut self.gpu {
+            g.renderer.set_crop(on.then_some(w.scale_factor() as f32));
+        }
+        self.sync_tray();
+        self.request_redraw();
+    }
+
+    /// 크기 조절 취소: 틀을 켜기 전 자리/크기로 되돌리고 끈다.
+    fn cancel_crop(&mut self) {
+        if let Some(orig) = self.crop.as_ref().map(|c| c.orig) {
+            self.set_rect(orig);
+            self.set_crop(false);
+        }
+    }
+
+    /// 크기 조절 중 커서 이동 (화면 pt): 손잡이를 잡고 있으면 크기를 바꾸고, 아니면 커서 모양만.
+    fn crop_cursor(&mut self, x: f64, y: f64) {
+        let Some(c) = &self.crop else { return };
+        if let Some((h, start)) = c.grab {
+            self.set_rect(crop::drag_rect(start, h, (x, y)));
+            return;
+        }
+        if self.dragging {
+            return;
+        }
+        let Some(r) = self.rect() else { return };
+        let over = crop::handle_at(x - r.x, y - r.y, r.s);
+        if let (Some(c), Some(w)) = (&mut self.crop, &self.window) {
+            if c.over != over {
+                c.over = over;
+                w.set_cursor(match over {
+                    Some((-1, -1) | (1, 1)) => CursorIcon::NwseResize,
+                    Some((1, -1) | (-1, 1)) => CursorIcon::NeswResize,
+                    Some((_, 0)) if over != Some((0, 0)) => CursorIcon::EwResize,
+                    Some((0, _)) if over != Some((0, 0)) => CursorIcon::NsResize,
+                    _ => CursorIcon::Move,
+                });
+            }
+        }
     }
 
     /// 입력 키 보기 켜기/끄기. 캐릭터는 제자리에 두고 창만 위로 늘리거나 줄인다.
@@ -656,6 +792,14 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Input(i, at) => {
                 trace::event(at, "input", || serde_json::json!({ "input": i }));
                 self.pet.on_input(i, at);
+                // 크기 조절 중: Enter 완료, Esc 취소
+                if let (Input::Key(code), true) = (i, self.crop.is_some()) {
+                    match code {
+                        36 | 76 => self.set_crop(false),
+                        53 => self.cancel_crop(),
+                        _ => {}
+                    }
+                }
                 // 키 이름은 화면에 잠깐 그릴 뿐 남기지 않는다
                 if let (Input::Key(code), true, true) = (i, self.cfg.key_echo, self.cfg.visible) {
                     if self.keys.push(code, at) {
@@ -705,6 +849,30 @@ impl ApplicationHandler<AppEvent> for App {
                     self.cfg.position = Some((p.x, p.y + self.pad()));
                 }
             }
+            // 크기 조절 중: 손잡이를 누르면 잡고, 틀 안을 누르면 옮긴다
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if self.crop.is_some() => {
+                let Some(w) = self.window.clone() else { return };
+                let h = self.crop.as_ref().and_then(|c| c.over).filter(|h| *h != (0, 0));
+                match (h, self.rect()) {
+                    (Some(h), Some(r)) => {
+                        if let Some(c) = &mut self.crop {
+                            c.grab = Some((h, r));
+                            c.last_click = None;
+                        }
+                    }
+                    _ => {
+                        self.dragging = true;
+                        self.press_pos = w.outer_position().ok();
+                        let _ = w.drag_window();
+                    }
+                }
+            }
+            WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } if self.crop.as_ref().is_some_and(|c| c.grab.is_some()) => {
+                if let Some(c) = &mut self.crop {
+                    c.grab = None;
+                }
+                self.save();
+            }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if self.hover => {
                 // 책상 소품을 누르면 소품이 반응하고 캐릭터가 알아챈다 (끌기 대신)
                 if let Some(id) = self.prop_at(self.cursor_uv) {
@@ -720,6 +888,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 if let Some(w) = &self.window {
                     self.dragging = true;
+                    self.press_pos = w.outer_position().ok();
                     let _ = w.drag_window();
                 }
             }
@@ -853,6 +1022,10 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
                     if pairs && f != still {
                         off.render(still).save(format!("{d}/{i:05}_s.png")).map_err(|e| e.to_string())?;
                     }
+                    // 섞인 프레임은 한 장으로 고른 기준 <번호>_u.png (T1)
+                    if pairs && typing_pet::is_blend(f) {
+                        off.render(&typing_pet::unblend(f)).save(format!("{d}/{i:05}_u.png")).map_err(|e| e.to_string())?;
+                    }
                     log.push(serde_json::json!({ "i": i, "deform": def, "mix": typing_pet::is_blend(f) }));
                 }
                 std::fs::write(format!("{d}/frames.json"), serde_json::to_string(&log).unwrap_or_default()).map_err(|e| e.to_string())?;
@@ -883,8 +1056,13 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
             let mut log = Vec::new();
             for f in 0..fps * secs {
                 let now_ms = f * 1000 / fps;
+                // 이 프레임까지 들어온 커서 이동량 (움직임 QA: 손이 커서 방향을 따라가는지)
+                let mut cursor = [0i32; 2];
                 while next < inputs.len() && inputs[next].0 <= now_ms {
                     let (ms, i) = inputs[next];
+                    if let Input::MouseMove { dx, dy } = i {
+                        cursor = [cursor[0] + dx, cursor[1] + dy];
+                    }
                     pet.on_input(i, t0 + Duration::from_millis(ms));
                     if let (true, Input::Key(code)) = (keys_on, i) {
                         keys.push(code, t0 + Duration::from_millis(ms));
@@ -916,9 +1094,17 @@ fn cli_render(args: &[String]) -> Option<Result<(), String>> {
                 if pairs && still_f != frame {
                     off.render_scene(&still_f, &sprites).save(format!("{dir}/{f:05}_s.png")).map_err(|e| e.to_string())?;
                 }
+                // 섞인 프레임은 한 장으로 고른 기준 _u (T1), 키 빛이 있는 프레임은 빛을 뺀 기준 _g (T4)
+                if pairs && typing_pet::is_blend(&frame) {
+                    off.render_scene(&typing_pet::unblend(&frame), &sprites).save(format!("{dir}/{f:05}_u.png")).map_err(|e| e.to_string())?;
+                }
+                if pairs && typing_pet::has_glow(&frame) {
+                    off.render_scene(&typing_pet::without_glow(&frame), &sprites).save(format!("{dir}/{f:05}_g.png")).map_err(|e| e.to_string())?;
+                }
                 log.push(serde_json::json!({
                     "ms": now_ms, "state": st, "score": (pet.score(now) * 10.0).round() / 10.0,
-                    "started": started, "playing": anim.playing(now), "deform": def,
+                    "started": started, "playing": anim.playing(now), "deform": def, "cursor": cursor,
+                    "hand": frame.cmds.iter().find(|c| c.layers().contains(&"fx/mouse")).map(|c| c.offset),
                     "mix": typing_pet::is_blend(&frame),
                 }));
             }

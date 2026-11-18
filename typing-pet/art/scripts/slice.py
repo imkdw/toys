@@ -7,9 +7,9 @@
 앞발과 제스처는 base 와 실제로 달라진 곳(앞발)만 변형 그림을 쓰고 나머지(책상, 키보드)는 base 를 그대로 둔다.
 생성 그림은 책상 선이 몇 px 씩 어긋나 있어서, 그대로 쓰면 앞발이 바뀔 때마다 책상이 흔들려 보인다.
 
-마우스 자세는 슥슥 움직이는 연출을 위해 두 장으로 나눈다.
-- fx/mouse_arm: 팔/손/마우스만 잘라낸 그림. 앱이 어깨(root)에서 손끝(tip)으로 갈수록 크게 휘게 그린다.
-- paw_r/mouse_bg: 팔을 치운 바탕. 팔이 움직이면 드러나는 마우스패드 자리는 base 에서 마우스를 지워 채운다.
+마우스 자세(paw_r/mouse, fx/mouse, fx/mouse_arm)와 manifest 의 [mouse] 는 여기서 만들지 않는다.
+art/scripts/mouse_rig.py 가 base 에서 앞발을 지우고 팔과 마우스를 따로 그려 넣는다 (build.sh 가 이 다음에 부른다).
+picks 의 paw_r/mouse, paw_r/mouse_click 은 앞발 마스크 범위를 정하는 데만 쓴다.
 
 캐릭터 고유 행동 (docs/CHARACTER_BEHAVIOR_PLAN.md):
 - mask/body: 머리 + 앞발 마스크를 넓힌 것. 몸 전체 움직임(hop, tremble 등)을 이 안으로 한정한다 (책상은 제자리).
@@ -101,10 +101,44 @@ def changed(base: np.ndarray, var: np.ndarray, thr: float = 48, shift: int = 4, 
         if stats[i, cv2.CC_STAT_AREA] >= 40:
             keep[lab == i] = 1
     keep = cv2.morphologyEx(keep, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25)))
+    # 바뀐 테두리에 둘러싸인 속(예: 크림색 몸 위에 쓴 흰 두건)은 색 차이가 작아도 바뀐 것으로 친다
+    keep = fill_holes(keep).astype(np.uint8)
     keep = cv2.dilate(keep, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (19, 19)))
     k = feather * 2 + 1
     # 바뀐 픽셀은 정확히 1 이 되게 (조금이라도 base 가 섞이면 지운 외곽선이 희미하게 남는다)
     return np.clip(cv2.GaussianBlur(keep.astype(np.float32), (k, k), feather / 2) * 1.25, 0, 1)
+
+
+def changed_tight(base: np.ndarray, var: np.ndarray, thr: float = 48, shift: int = 4, grow: int = 14, feather: int = 2) -> np.ndarray:
+    """앞발 레이어용 바뀐 영역 (0~1). changed() 처럼 넓히고 크게 페더링하면 그 띠 안에서 몇 px 어긋난
+    책상 선/몸 윤곽이 base 것과 반씩 섞여 두 줄로 번진다 (팔이 몸/책상에 붙는 자리).
+
+    그래서 넓히지 않는다. 진짜 새로 생긴 곳(shift px 어긋남으로 설명 안 되는 곳)을 씨앗으로 두고,
+    거기서 실제 픽셀이 다른 곳으로만 grow px 까지 키운다. 어긋난 선은 씨앗 근처까지만 변형 그림을 쓰고
+    나머지는 base 를 써서, 선이 섞이지 않고 팔 가장자리에서 바로 이어진다. 가는 가지(어긋난 선을 따라
+    뻗은 것)는 열기로 잘라 점이 남지 않게 한다.
+    """
+    fb, fv = flat(base), flat(var)
+    raw = (np.abs(fb - fv).max(axis=-1) > 40).astype(np.uint8)
+    raw = cv2.dilate(raw, np.ones((3, 3), np.uint8))
+    raw_any = cv2.dilate(raw, np.ones((5, 5), np.uint8))
+    d = np.maximum(shift_diff(fv, fb, shift), shift_diff(fb, fv, shift))
+    m = (cv2.GaussianBlur(d, (3, 3), 0) > thr).astype(np.uint8)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(m, 8)
+    seed = np.isin(lab, [i for i in range(1, n) if st[i, cv2.CC_STAT_AREA] >= 40]).astype(np.uint8)
+    seed = cv2.morphologyEx(seed, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+    core = seed.copy()
+    # 사라진 선(올렸던 앞발 외곽선)은 가장자리 shift px 가 씨앗에서 빠지므로 그만큼 넓힌다 (실제로 다른 픽셀까지만)
+    seed = cv2.dilate(seed, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * shift + 5, 2 * shift + 5))) & raw_any
+    reg = seed.copy()
+    lim = cv2.dilate(seed, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow * 2 + 1, grow * 2 + 1)))
+    for _ in range(grow):
+        reg = cv2.dilate(reg, np.ones((3, 3), np.uint8)) & (raw | seed) & lim
+    reg = cv2.morphologyEx(reg, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    reg = cv2.morphologyEx(reg, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))) | core
+    reg = fill_holes(reg)
+    k = feather * 2 + 1
+    return np.clip(cv2.GaussianBlur(reg.astype(np.float32), (k, k), feather / 2) * 1.25, 0, 1)
 
 
 def blend(base: np.ndarray, var: np.ndarray, w: np.ndarray) -> np.ndarray:
@@ -126,9 +160,10 @@ def load_var(src: Path) -> np.ndarray:
     return v
 
 
-def change_job(src: Path) -> np.ndarray:
+def change_job(args) -> np.ndarray:
+    src, tight = args
     base = np.array(Image.open(WORK / "base.png").convert("RGBA"))
-    return changed(base, load_var(src))
+    return (changed_tight if tight else changed)(base, load_var(src))
 
 
 def job(args):
@@ -154,150 +189,13 @@ def base_mouse(base: np.ndarray, near: list[float]) -> np.ndarray | None:
     return fill_holes(lab == min(cands, key=lambda j: np.hypot(*(c[j] - near))))
 
 
-def body_is_white(base: np.ndarray) -> bool:
-    """base 에서 가장 큰 흰 덩어리가 캔버스의 5% 넘게 차지하면 몸이 흰색이다."""
-    bw = ((base[..., :3].min(axis=-1) > 215) & (base[..., 3] > 128)).astype(np.uint8)
-    n, _, st, _ = cv2.connectedComponentsWithStats(bw, 8)
-    return n > 1 and st[1:, cv2.CC_STAT_AREA].max() > bw.size * 0.05
-
-
 def fill_holes(m: np.ndarray) -> np.ndarray:
-    m = m.astype(np.uint8) * 255
-    h, w = m.shape
-    ff = m.copy()
+    """닫힌 윤곽 안을 채운다 (바깥에서 번져 닿지 않는 곳)."""
+    u = m.astype(np.uint8) * 255
+    h, w = u.shape
+    ff = u.copy()
     cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 255)
-    return (m | cv2.bitwise_not(ff)) > 0
-
-
-def cream_arm(base, v, mask, chg, rgb, alpha, xx, yy):
-    """몸이 크림색(우사기): 몸 색 픽셀이 팔, 흰 덩어리가 마우스. (sprite, root, tip, near)"""
-    h, w = mask.shape
-    inside = (chg > 0.5) & (mask > 0.5)
-    body = base[h // 2 - 100, w // 2, :3].astype(np.int32)  # 몸 가운데 크림색
-    cream = (np.abs(rgb - body).max(axis=-1) < 28) & (alpha > 128)
-    white = (rgb.min(axis=-1) > 228) & (alpha > 128)
-    dark = (rgb.max(axis=-1) < 120) & (alpha > 128)
-    # 손끝: 앞발 영역 안 흰 덩어리(마우스) 중 가장 큰 것의 중심
-    n, lab, stats, cents = cv2.connectedComponentsWithStats((white & inside).astype(np.uint8), 8)
-    i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-    tip = cents[i]
-    near = (xx - tip[0]) ** 2 + (yy - tip[1]) ** 2 < 80 ** 2
-    # 마우스(흰색)는 바뀐 영역 가장자리까지 다 넣어야 바탕에 잔상이 안 남는다
-    loose = (chg > 0.05) | (mask > 0.05)
-    core = ((cream & inside) | (white & near & loose)).astype(np.uint8)
-    core = cv2.morphologyEx(core, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    n, lab, stats, _ = cv2.connectedComponentsWithStats(core, 8)
-    keep = np.isin(lab, [j for j in range(1, n) if stats[j, cv2.CC_STAT_AREA] > 300])
-    adj = cv2.dilate(keep.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (27, 27))) > 0
-    sprite = keep | (dark & adj & (cv2.dilate(inside.astype(np.uint8), np.ones((31, 31), np.uint8)) > 0))
-    sprite = cv2.morphologyEx(sprite.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8)) > 0
-    # 어깨: 손끝 위쪽 150px 보다 높은 팔 픽셀의 중심
-    band = sprite & (yy < tip[1] - 150) & (np.abs(xx - tip[0]) < 110)
-    ys, xs = np.nonzero(band)
-    root = [float(xs.mean()), float(ys.mean())] if len(xs) else [float(tip[0]) - 60, float(tip[1]) - 170]
-    return sprite, root, tip, near
-
-
-def white_arm(base, v, mask, chg):
-    """몸이 흰색: 마우스 자세에서 base 의 몸 윤곽 밖으로 나온 흰 덩어리 중 가장 큰 것이 팔.
-    root 는 팔이 몸에 붙는 곳, tip 은 팔 끝 근처 마우스의 중심(없으면 팔 끝). (sprite, root, tip)"""
-    h, w = mask.shape
-    yy, xx = np.mgrid[:h, :w]
-    rgb, alpha = v[..., :3].astype(np.int32), v[..., 3]
-    white = (rgb.min(axis=-1) > 215) & (alpha > 128)
-    dark = (rgb.max(axis=-1) < 120) & (alpha > 128)
-    bwhite = ((base[..., :3].min(axis=-1) > 215) & (base[..., 3] > 128)).astype(np.uint8)
-    n, lab, st, _ = cv2.connectedComponentsWithStats(bwhite, 8)
-    body = fill_holes(lab == 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA])))
-    body_d = cv2.dilate(body.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
-    inside = (chg > 0.3) & (mask > 0.3)
-    cand = cv2.morphologyEx((white & inside & ~body_d).astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    n, lab, st, _ = cv2.connectedComponentsWithStats(cand, 8)
-    arm = lab == 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
-    # 팔 끝은 몸에서 가장 먼 5%, 어깨는 가장 가까운 5%
-    dist = cv2.distanceTransform((~body).astype(np.uint8), cv2.DIST_L2, 5)
-    da = dist[arm]
-    ys, xs = np.nonzero(arm)
-    far, close = da >= np.percentile(da, 95), da <= np.percentile(da, 5)
-    hand = np.array([xs[far].mean(), ys[far].mean()])
-    root = [float(xs[close].mean()), float(ys[close].mean())]
-    # 마우스: base 에서 손 근처의 흰 덩어리 (몸, 키캡 제외). 바뀐 영역 가장자리까지 넣어야 바탕에 잔상이 안 남는다
-    bm = (bwhite > 0) & ~body_d
-    n2, lab2, st2, c2 = cv2.connectedComponentsWithStats(bm.astype(np.uint8), 8)
-    cands = [j for j in range(1, n2) if 300 < st2[j, cv2.CC_STAT_AREA] < 8000 and np.hypot(*(c2[j] - hand)) < 90]
-    tip = c2[min(cands, key=lambda j: np.hypot(*(c2[j] - hand)))] if cands else hand
-    near = (xx - tip[0]) ** 2 + (yy - tip[1]) ** 2 < 60 ** 2
-    loose = (chg > 0.05) | (mask > 0.05)
-    keep = arm | (white & near & loose & ~body_d)
-    keep = cv2.morphologyEx(keep.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)) > 0
-    adj = cv2.dilate(keep.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))) > 0
-    sprite = keep | (dark & adj & ~body_d)
-    sprite = cv2.morphologyEx(sprite.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8)) > 0
-    return sprite, root, tip
-
-
-def mouse_swing(out: Path, src: Path, mask: np.ndarray, chg: np.ndarray) -> dict:
-    """마우스 자세를 팔(fx/mouse_arm)과 바탕(paw_r/mouse_bg)으로 나누고 휘는 축(root -> tip)을 돌려준다."""
-    base = np.array(Image.open(WORK / "base.png").convert("RGBA"))
-    v = blend(base, load_var(src), chg)
-    h, w = mask.shape
-    yy, xx = np.mgrid[:h, :w]
-    rgb, alpha = v[..., :3].astype(np.int32), v[..., 3]
-    body_white = body_is_white(base)
-    if body_white:
-        # 몸이 흰색(치이카와, 하치와레)이면 몸과 마우스를 색으로 못 가른다. 몸 윤곽 밖으로 나온 흰 부분을 팔로 본다
-        sprite, root, tip = white_arm(base, v, mask, chg)
-        near = (xx - tip[0]) ** 2 + (yy - tip[1]) ** 2 < 80 ** 2
-    else:
-        sprite, root, tip, near = cream_arm(base, v, mask, chg, rgb, alpha, xx, yy)
-
-    # 마우스 외곽선도 팔과 같이 움직인다
-    mw = (rgb.min(axis=-1) > 215) & (alpha > 128) & near & (mask > 0.05)
-    mdark = (rgb.max(axis=-1) < 120) & (alpha > 128)
-    sprite |= mdark & (cv2.dilate(mw.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0) & (mask > 0.05)
-    arm = v.copy()
-    sa = cv2.GaussianBlur(sprite.astype(np.float32), (3, 3), 0) * np.clip(mask * 1.5, 0, 1)
-    arm[..., 3] = (arm[..., 3].astype(np.float32) * sa).astype(np.uint8)
-    save_layer(out, "fx/mouse_arm", arm)
-
-    # 바탕: 팔 자리는 base 로, base 의 마우스는 패드 색으로 지운다
-    bw = (base[..., :3].min(axis=-1) > 228) & (base[..., 3] > 128) & near
-    # 마우스 바로 둘레에서 패드 색을 고른다. 흰 몸 캐릭터는 패드 여백이 좁아 넓게 보면 책상 색이 뽑힌다
-    r_out, r_in = (19, 9) if body_white else (31, 15)
-    ring = (cv2.dilate(bw.astype(np.uint8), np.ones((r_out, r_out), np.uint8)) > 0) & ~(cv2.dilate(bw.astype(np.uint8), np.ones((r_in, r_in), np.uint8)) > 0)
-    cand = base[ring & (base[..., :3].max(axis=-1) > 150)][:, :3].astype(np.int32) // 8
-    keys, cnt = np.unique(cand[:, 0] * 10000 + cand[:, 1] * 100 + cand[:, 2], return_counts=True)
-    k = int(keys[cnt.argmax()]) if len(keys) else 0
-    pad = np.array([k // 10000, (k // 100) % 100, k % 100]) * 8 + 4
-    fixed = base.copy()
-    erase = cv2.dilate(bw.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (29, 29))) > 0
-    fixed[erase, :3] = pad
-    fixed[erase, 3] = 255
-    # 손끝 근처(마우스패드)는 base 에서, 팔 가운데는 주변 색으로 메운다 (base 에는 올린 앞발이 있어서 못 쓴다)
-    hole_m = (cv2.dilate(sprite.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0).astype(np.uint8)
-    filled = v.copy()
-    filled[..., :3] = cv2.inpaint(np.ascontiguousarray(v[..., :3]), hole_m, 9, cv2.INPAINT_TELEA)
-    filled[..., 3] = cv2.inpaint(np.ascontiguousarray(v[..., 3]), hole_m, 9, cv2.INPAINT_TELEA)
-    dist = np.sqrt((xx - tip[0]) ** 2 + (yy - tip[1]) ** 2)
-    pad_w = 1.0 - np.clip((dist - 75) / 30, 0, 1)
-    filled = blend(filled, fixed, pad_w.astype(np.float32))
-    hole = cv2.GaussianBlur(hole_m.astype(np.float32), (9, 9), 3)
-    bg = blend(v, filled, hole)
-    bg[mask <= 0.0] = 0
-    save_layer(out, "paw_r/mouse_bg", bg)
-    print(f"마우스 팔: root={[round(c, 1) for c in root]} tip={[round(float(c), 1) for c in tip]} 팔 {int(sprite.sum())}px")
-    return {"root": [round(c, 1) for c in root], "tip": [round(float(c), 1) for c in tip]}
-
-
-def swing_toml(sw: dict | None) -> str:
-    if not sw:
-        return ""
-    return f"""
-# 마우스 연출: fx/mouse_arm 을 root(어깨) 에서 tip(손끝) 으로 갈수록 크게 휘게 그린다 (캔버스 px)
-[swing]
-root = [{sw['root'][0]}, {sw['root'][1]}]
-tip = [{sw['tip'][0]}, {sw['tip'][1]}]
-"""
+    return (u | cv2.bitwise_not(ff)) > 0
 
 
 def toml_val(v) -> str:
@@ -480,7 +378,7 @@ def uses_layer(picks: dict, layer: str) -> bool:
 
 def keyboard_ramp(shape, size: int, tips: dict) -> np.ndarray:
     """키보드 윗줄(앞발 끝 좌표) 위는 1, 아래는 0 인 세로 램프. 몸이 움직여도 그 아래(책상/키보드)는 제자리."""
-    tip_y = [v[1] for k, v in tips.items() if k in ("paw_l/down", "paw_r/down", "paw_r/center")]
+    tip_y = [v[1] for k, v in tips.items() if k in ("paw_l/down", "paw_r/down")]
     if not tip_y:
         return np.ones(shape, np.float32)
     cut, fade = min(tip_y) - size * 0.02, size * 0.02
@@ -542,7 +440,7 @@ def main() -> None:
     # 앞발/제스처: base 와 실제로 달라진 곳만 변형을 쓴다. 앞발 마스크가 달라진 곳을 다 덮도록 넓힌다
     chg_layers = [k for k in srcs if k.split("/")[0] in ("paw_l", "paw_r", "full")]
     with ProcessPoolExecutor() as ex:
-        chg = dict(zip(chg_layers, ex.map(change_job, [srcs[k] for k in chg_layers])))
+        chg = dict(zip(chg_layers, ex.map(change_job, [(srcs[k], k.startswith("paw_")) for k in chg_layers])))
     for g in ["paw_l", "paw_r"]:
         for k, c in chg.items():
             if k.startswith(g + "/"):
@@ -586,10 +484,6 @@ def main() -> None:
         v[..., 3] *= m
         save_layer(out, "fx/sunglasses", v.astype(np.uint8))
         names.append("fx/sunglasses")
-    swing = None
-    if "paw_r/mouse" in picks and (WORK / "matched" / f"{picks['paw_r/mouse']}.png").exists():
-        swing = mouse_swing(out, srcs["paw_r/mouse"], masks["paw_r"], chg["paw_r/mouse"])
-        names += ["paw_r/mouse_bg", "fx/mouse_arm"]
     # 장면 소품 (art/scripts/extract_fx.py 가 work/fx/ 에 잘라 둔 것): 그대로 fx/ 로
     for f in sorted((WORK / "fx").glob("*.png")) if (WORK / "fx").is_dir() else []:
         save_layer(out, f"fx/{f.stem}", np.array(Image.open(f).convert("RGBA")))
@@ -604,11 +498,19 @@ def main() -> None:
         empty = np.array(Image.open(WORK / "matched" / f"{picks['desk_empty']}.png").convert("RGBA")).astype(np.float32)
         layer_names = [n for n in names if (out / "layers" / f"{n}.png").exists()]
         hide = declutter(out, layer_names, empty, chg)
+        # "_desk": {"show": {"full/x": ["slot"]}}: 자동 판정이 숨겼지만 실제로는 안 덮는 자리 (a/b 교대 때 소품이 깜빡이지 않게)
+        for f, slots in picks.get("_desk", {}).get("show", {}).items():
+            left = [x for x in hide.get(f, []) if x not in slots]
+            if left:
+                hide[f] = left
+            else:
+                hide.pop(f, None)
     names += ["mask/head", "mask/paw_l", "mask/paw_r", "mask/body", "mask/paw_l_top", "mask/paw_l_low", "mask/paw_r_top", "mask/paw_r_low"]
 
     order = ["base", "head/", "paw_l/", "paw_r/", "fx/", "full/", "mask/"]
     names.sort(key=lambda n: (next(i for i, p in enumerate(order) if n.startswith(p)), n))
-    tips = "\n".join(f'"{k}" = [{v[0]}, {v[1]}]' for k, v in geo["tips"].items())
+    # 만든 레이어의 발끝만 (예전 automask 가 남긴 paw_r/center 같은 것은 뺀다)
+    tips = "\n".join(f'"{k}" = [{v[0]}, {v[1]}]' for k, v in geo["tips"].items() if k in names)
     layers = ",\n".join(f'  "{n}"' for n in names)
     ha = geo["head_anchor"]
     canvas = Image.open(WORK / "base.png").size[0]
@@ -635,7 +537,7 @@ paw_r_low = "mask/paw_r_low"
 
 [tips]
 {tips}
-{swing_toml(swing)}{section_toml(picks, "_timing", "timing")}{section_toml(picks, "_anim", "anim")}{expressions_toml(picks, names)}{desk_toml(picks, hide)}{scenes_toml(picks, names)}{behaviors_toml(picks, names)}""",
+{section_toml(picks, "_timing", "timing")}{section_toml(picks, "_anim", "anim")}{expressions_toml(picks, names)}{desk_toml(picks, hide)}{scenes_toml(picks, names)}{behaviors_toml(picks, names)}""",
         encoding="utf-8",
     )
     print(f"{out.relative_to(ROOT)}: 레이어 {len(names)}장")

@@ -23,7 +23,9 @@ struct U {
     db: vec4<f32>,   // 변형: 몸 anchor.xy, offset.xy (uv)
     ds: vec4<f32>,   // 변형: 몸 배율.xy, 머리 배율.xy
     dh: vec4<f32>,   // 변형: 머리 anchor.xy, offset.xy (uv)
-    dm: vec4<f32>,   // 변형: 마우스 이동.xy (uv), _, _
+    dm: vec4<f32>,   // (안 씀)
+    bn: vec4<f32>,   // 팔 기울이기: root.xy, tip.xy (uv)
+    bd: vec4<f32>,   // 팔 기울이기: 손 이동.xy (uv), 손이 시작하는 곳 (0~1), 사용(1)
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(1) @binding(0) var ta: texture_2d<f32>;
@@ -56,7 +58,21 @@ fn deform_uv(uv: vec2<f32>) -> vec2<f32> {
     let w = clamp(textureSampleLevel(tw, smp, uv, 0.0), vec4(0.0), vec4(1.0));
     let pb = u.db.xy + (uv - u.db.xy - u.db.zw) / u.ds.xy;
     let ph = u.dh.xy + (uv - u.dh.xy - u.dh.zw) / u.ds.zw;
-    return uv + w.r * (pb - uv) + w.g * (ph - uv) - w.b * u.dm.xy;
+    return uv + w.r * (pb - uv) + w.g * (ph - uv);
+}
+
+// 팔 기울이기: 출력 자리 uv 에서 읽을 팔 그림 자리. 어깨(root)는 제자리, 손(축의 hand 이후)은 d 만큼,
+// 그 사이는 어깨에서 멀수록 많이 옮긴다. 옮긴 뒤의 자리에서 거꾸로 찾으므로 몇 번 되풀이해 맞춘다.
+fn bend_uv(uv: vec2<f32>) -> vec2<f32> {
+    let ax = u.bn.zw - u.bn.xy;
+    let l2 = max(dot(ax, ax), 1e-8);
+    var q = uv;
+    for (var i = 0; i < 6; i++) {
+        let s = clamp(dot(q - u.bn.xy, ax) / l2 / u.bd.z, 0.0, 1.0);
+        let t = 0.5 * s + 0.5 * s * s * (3.0 - 2.0 * s);
+        q = uv - t * u.bd.xy;
+    }
+    return q;
 }
 
 fn hash2(p: vec2<f32>) -> f32 {
@@ -77,13 +93,18 @@ fn fs(v: VO) -> @location(0) vec4<f32> {
     if (u.k.z > 0.5) {
         suv = deform_uv(v.uv);
     }
+    if (u.bd.w > 0.5) {
+        suv = bend_uv(suv);
+    }
     let a = textureSample(ta, smp, suv);
     let b = textureSample(tb, smp, suv);
     let m = textureSample(tm, smp, suv).r * u.p.y;
     if (mode == 1u) {
         let x = clamp(distance(v.uv, u.g.xy) / u.g.z, 0.0, 1.0);
         let k = (1.0 - x * x);
-        return u.c * (k * k) * u.p.y;
+        // 마스크가 있으면 그 밖에만 (앞발 캐릭터 픽셀 위에는 빛을 그리지 않는다)
+        let keep = select(1.0, 1.0 - textureSample(tm, smp, suv).r, u.g.w > 0.5);
+        return u.c * (k * k) * u.p.y * keep;
     }
     if (mode == 5u) {
         // 구름처럼 흩어지기: 가장자리부터, 뭉게뭉게한 무늬를 따라 지워진다
@@ -160,7 +181,40 @@ pub fn load_layers(m: &Manifest) -> HashMap<String, Arc<SrcImage>> {
             Err(e) => log::warn!("레이어 로딩 실패 {}: {e}", path.display()),
         }
     }
+    add_char_masks(&mut out);
     out
+}
+
+/// 앞발 레이어마다 캐릭터 픽셀 마스크 `mask/char/<레이어>` 를 만든다 (키 빛을 앞발 위에 그리지 않으려고, [`crate::anim::char_mask_name`]).
+/// 앞발 레이어에는 책상/키보드도 같이 들어 있어서, 캐릭터를 지운 책상(base_clean, 없으면 base)과 다른 픽셀을 캐릭터로 본다.
+fn add_char_masks(out: &mut HashMap<String, Arc<SrcImage>>) {
+    let Some(desk) = out.get("base_clean").or_else(|| out.get("base")).cloned() else { return };
+    let names: Vec<String> = out.keys().filter(|k| k.starts_with("paw_")).cloned().collect();
+    for name in names {
+        let img = out[&name].clone();
+        if img.w != desk.w || img.h != desk.h {
+            continue;
+        }
+        let (w, h) = (img.w as usize, img.h as usize);
+        let mut on = vec![false; w * h];
+        for (i, o) in on.iter_mut().enumerate() {
+            let (p, d) = (&img.data[i * 4..i * 4 + 4], &desk.data[i * 4..i * 4 + 4]);
+            let diff = (0..3).map(|k| (p[k] as i32 - d[k] as i32).abs()).max().unwrap_or(0);
+            *o = (p[3] > 128 && d[3] < 128) || (p[3] > 128 && diff > 40);
+        }
+        // 윤곽선 가장자리까지 덮도록 2px 넓힌다
+        let r = 2usize;
+        let mut data = vec![0u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let hit = (y.saturating_sub(r)..(y + r + 1).min(h)).any(|yy| (x.saturating_sub(r)..(x + r + 1).min(w)).any(|xx| on[yy * w + xx]));
+                if hit {
+                    data[(y * w + x) * 4..(y * w + x) * 4 + 4].fill(255);
+                }
+            }
+        }
+        out.insert(crate::anim::char_mask_name(&name), Arc::new(SrcImage { w: img.w, h: img.h, data }));
+    }
 }
 
 /// 캐릭터가 그려질 수 있는 자리 (모든 레이어 알파의 합집합, n x n 칸). 커서가 캐릭터 위에 있는지 볼 때 쓴다.
@@ -261,6 +315,10 @@ pub struct Renderer {
     canvas: u32,
     /// 키 말풍선: (키 이름, 높이 px) -> (가로/세로 비율, 텍스처 바인드). 없으면(그리기 실패) None.
     clouds: HashMap<(&'static str, u32), Option<(f32, wgpu::BindGroup)>>,
+    /// 크기 조절 틀을 그릴 때의 화면 배율 (None 이면 안 그린다).
+    crop: Option<f32>,
+    /// 크기 조절 틀 텍스처: (창 px 너비, 높이) -> 바인드. 창 크기가 바뀌면 다시 만든다.
+    crop_tex: Option<((u32, u32), wgpu::BindGroup)>,
 }
 
 /// 창 안 배치: 캐릭터 정사각형은 창 아래쪽에 있고, 위쪽 `pad` px 는 키 말풍선 자리.
@@ -301,7 +359,7 @@ impl Renderer {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
-                    min_binding_size: wgpu::BufferSize::new(144),
+                    min_binding_size: wgpu::BufferSize::new(176),
                 },
                 count: None,
             }],
@@ -386,7 +444,7 @@ impl Renderer {
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &uni_buf,
                     offset: 0,
-                    size: wgpu::BufferSize::new(144),
+                    size: wgpu::BufferSize::new(176),
                 }),
             }],
         });
@@ -419,6 +477,8 @@ impl Renderer {
             bind_cache: HashMap::new(),
             canvas,
             clouds: HashMap::new(),
+            crop: None,
+            crop_tex: None,
         }
     }
 
@@ -511,6 +571,51 @@ impl Renderer {
         Some(bg)
     }
 
+    /// 크기 조절 틀 켜기/끄기. `scale` 은 화면 배율 (선 굵기용).
+    pub fn set_crop(&mut self, scale: Option<f32>) {
+        if self.crop != scale {
+            self.crop = scale;
+            self.crop_tex = None;
+        }
+    }
+
+    /// 창 전체 크기의 크기 조절 틀 텍스처 (창 크기가 같으면 만들어 둔 것).
+    fn crop_bind(&mut self, l: Layout, scale: f32) -> wgpu::BindGroup {
+        if let Some((wh, bg)) = &self.crop_tex {
+            if *wh == (l.w, l.h) {
+                return bg.clone();
+            }
+        }
+        #[allow(unused_mut)]
+        let mut data = crate::crop::frame_image(l.w, l.h, l.pad(), scale);
+        // 안내문: 캐릭터 정사각형 위쪽, 손잡이 아래 가운데
+        #[cfg(target_os = "macos")]
+        {
+            let side = l.w.min(l.h - l.pad()) as i32;
+            let hs = crate::crop::handle_px(side, scale);
+            let max_w = (side - hs * 4).max(0) as u32;
+            if let Some(img) = crate::text::hint(&["모서리를 끌어 크기 조절", "Enter 저장 / Esc 취소"], max_w, scale) {
+                let x = (side - img.w as i32) / 2;
+                let y = l.pad() as i32 + hs + (6.0 * scale) as i32;
+                crate::crop::paste(&mut data, l.w, l.h, &img.data, img.w, img.h, x, y);
+            }
+        }
+        let t = Self::upload_wh(&self.device, &self.queue, l.w, l.h, &data, "crop");
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("crop"),
+            layout: &self.bgl_tex,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&t.view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&t.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.white.view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.dummy.view) },
+            ],
+        });
+        self.crop_tex = Some(((l.w, l.h), bg.clone()));
+        bg
+    }
+
     /// 키 말풍선 텍스처 (처음 쓸 때 그려 둔다).
     fn cloud(&mut self, label: &'static str, h: u32) -> Option<(f32, wgpu::BindGroup)> {
         if let Some(v) = self.clouds.get(&(label, h)) {
@@ -554,14 +659,14 @@ impl Renderer {
     /// 캐릭터(`frame`)와 키 말풍선을 그린다. `layout` 이 있으면 캐릭터는 아래쪽 정사각형에, 말풍선은 창 전체 기준.
     pub fn draw_scene(&mut self, frame: &Frame, keys: &[crate::keyecho::Sprite], layout: Option<Layout>, target: &wgpu::TextureView) {
         let c = self.canvas as f32;
-        let mut unis: Vec<[f32; 36]> = Vec::new();
+        let mut unis: Vec<[f32; 44]> = Vec::new();
         // (파이프라인, 바인드, 창 전체에 그리기)
         let mut binds: Vec<(u8, wgpu::BindGroup, bool)> = Vec::new();
         for cmd in &frame.cmds {
             let (a, b, t, mode, g) = match &cmd.kind {
                 DrawKind::Layer { name } => (name.as_str(), name.as_str(), 0.0, 0.0, [0.0; 4]),
                 DrawKind::Mix { a, b, t } => (a.as_str(), b.as_str(), *t, 0.0, [0.0; 4]),
-                DrawKind::Glow { center, radius, .. } => ("", "", 0.0, 1.0, [center[0] / c, center[1] / c, radius / c, 0.0]),
+                DrawKind::Glow { center, radius, .. } => ("", "", 0.0, 1.0, [center[0] / c, center[1] / c, radius / c, if cmd.mask.is_some() { 1.0 } else { 0.0 }]),
             };
             let m = cmd.mask.as_deref().unwrap_or("");
             let wf = cmd.deform.as_ref().map_or("", |d| d.field.as_str());
@@ -578,11 +683,15 @@ impl Renderer {
                     d.body.anchor[0] / c, d.body.anchor[1] / c, d.body.offset[0] / c, d.body.offset[1] / c,
                     d.body.s[0], d.body.s[1], d.head.s[0], d.head.s[1],
                     d.head.anchor[0] / c, d.head.anchor[1] / c, d.head.offset[0] / c, d.head.offset[1] / c,
-                    d.mouse[0] / c, d.mouse[1] / c, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0,
                 ],
                 None => [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             };
             let on = if cmd.deform.is_some() { 1.0 } else { 0.0 };
+            let bv: [f32; 8] = match &cmd.bend {
+                Some(b) => [b.root[0] / c, b.root[1] / c, b.tip[0] / c, b.tip[1] / c, b.d[0] / c, b.d[1] / c, b.hand.max(0.05), 1.0],
+                None => [0.0; 8],
+            };
             let u = |mode: f32| {
                 [
                     cmd.anchor[0] / c, cmd.anchor[1] / c, cmd.offset[0] / c, cmd.offset[1] / c,
@@ -592,6 +701,7 @@ impl Renderer {
                     cmd.squash[0], cmd.squash[1], on, 0.0,
                     dv[0], dv[1], dv[2], dv[3], dv[4], dv[5], dv[6], dv[7],
                     dv[8], dv[9], dv[10], dv[11], dv[12], dv[13], dv[14], dv[15],
+                    bv[0], bv[1], bv[2], bv[3], bv[4], bv[5], bv[6], bv[7],
                 ]
             };
             if !m.is_empty() && mode == 0.0 {
@@ -623,12 +733,28 @@ impl Renderer {
                     kx, ky, 0.0, 0.0,
                     0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
                     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 ]);
                 binds.push((0, bg, true));
             }
         }
-        unis.truncate(MAX_DRAWS as usize);
-        binds.truncate(MAX_DRAWS as usize);
+        unis.truncate(MAX_DRAWS as usize - 1);
+        binds.truncate(MAX_DRAWS as usize - 1);
+        // 크기 조절 틀은 맨 위에 창 전체로 (정사각형 텍스처 그대로: anchor 0, 배율 1)
+        if let (Some(l), Some(scale)) = (layout, self.crop) {
+            let bg = self.crop_bind(l, scale);
+            let mut u = [0.0f32; 44];
+            u[4] = 1.0; // scale
+            u[5] = 1.0; // opacity
+            u[16] = 1.0; // squash x
+            u[17] = 1.0; // squash y
+            u[24] = 1.0;
+            u[25] = 1.0;
+            u[26] = 1.0;
+            u[27] = 1.0;
+            unis.push(u);
+            binds.push((0, bg, true));
+        }
         let mut bytes = vec![0u8; (UNI_STRIDE as usize) * unis.len().max(1)];
         for (i, u) in unis.iter().enumerate() {
             let off = i * UNI_STRIDE as usize;

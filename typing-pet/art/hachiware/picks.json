@@ -4,9 +4,8 @@
   "base": "base_final",
   "paw_l/down": "left_down_1",
   "paw_r/down": "right_down_1",
-  "paw_r/center": "right_center_1",
-  "paw_r/mouse": "mouse_2",
-  "paw_r/mouse_click": "mouse_click_1",
+  "paw_r/mouse": "mouse_short_2",
+  "paw_r/mouse_click": "mouse_click_short_2",
   "head/excited": "head_excited_2",
   "head/dizzy": "head_dazed_1",
   "head/overheat": "head_optimist_1",
@@ -114,7 +113,7 @@
         {
           "target": "head",
           "kind": "sway",
-          "pt": 1,
+          "pt": 2.5,
           "period_ms": 700,
           "count": 1
         }

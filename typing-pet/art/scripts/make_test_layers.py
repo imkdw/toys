@@ -73,8 +73,8 @@ def scene(head="normal", paw_l="up", paw_r="up", gesture=False, startle=False, c
     if gesture:
         paw(360, 245, (255, 200, 0, 255))
     else:
-        pos = {"up": (315, 320), "down": (320, 375), "center": (250, 378), "mouse": (410, 370), "mouse_click": (410, 385)}[paw_r]
-        col = {"up": CREAM, "down": (150, 150, 255, 255), "center": (150, 220, 255, 255), "mouse": (200, 150, 255, 255),
+        pos = {"up": (315, 320), "down": (320, 375), "mouse": (410, 370), "mouse_click": (410, 385)}[paw_r]
+        col = {"up": CREAM, "down": (150, 150, 255, 255), "mouse": (200, 150, 255, 255),
                "mouse_click": (255, 120, 255, 255)}[paw_r]
         paw(*pos, col)
     return im
@@ -101,7 +101,7 @@ def main() -> None:
     save(root, "fx/sunglasses", sg)
     for p in ["up", "down"]:
         save(root, f"paw_l/{p}", scene(paw_l=p))
-    for p in ["up", "down", "center", "mouse", "mouse_click"]:
+    for p in ["up", "down", "mouse", "mouse_click"]:
         save(root, f"paw_r/{p}", scene(paw_r=p))
     save(root, "full/gesture", scene(gesture=True))
     # behavior 엔진 테스트용 (계획 5.2): 머리 바꾸기 2장, 전체 프레임 1장, 소품, 캐릭터를 지운 책상, 몸 마스크
@@ -142,7 +142,7 @@ layers = [
   "base",
   "head/normal", "head/excited", "head/dizzy", "head/dizzy_wiggle", "head/overheat", "head/sleepy", "head/sunglasses",
   "paw_l/up", "paw_l/down",
-  "paw_r/up", "paw_r/down", "paw_r/center", "paw_r/mouse", "paw_r/mouse_click",
+  "paw_r/up", "paw_r/down", "paw_r/mouse", "paw_r/mouse_click",
   "head/alt_a", "head/alt_b",
   "base_clean",
   "fx/sunglasses", "fx/bubble", "fx/drop", "fx/note", "fx/white",
@@ -166,7 +166,6 @@ paw_r_low = "mask/paw_r_low"
 [tips]
 "paw_l/down" = [160, 392]
 "paw_r/down" = [320, 392]
-"paw_r/center" = [250, 395]
 
 # 엔진 테스트용 가짜 behavior: 모든 cue/motion/fx 종류를 한 번씩 쓴다 (characters/README.md).
 # 기존 단위 테스트가 쓰는 단계 전환(excited, dizzy, 선글라스)과 장면 cue 는 비워 둔다.

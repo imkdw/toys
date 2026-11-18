@@ -4,8 +4,7 @@
   "base": "base_final",
   "paw_l/down": "left_down_2",
   "paw_r/down": "right_down_1",
-  "paw_r/center": "right_center_1",
-  "paw_r/mouse": "mouse_2",
+  "paw_r/mouse": "mouse_1",
   "paw_r/mouse_click": "mouse_click_1",
   "head/excited": "head_excited_1",
   "head/dizzy": "head_dazed_1",
@@ -62,10 +61,8 @@
     }
   },
   "full/staff_a": "scene_staff_a_2",
-  "full/staff_b": "scene_staff_b_2",
+  "full/staff_b": "scene_staff_b_pair_1",
   "full/sleep_a": "scene_sleep_a_2",
-  "full/yaha_a": "scene_yaha_a_2",
-  "full/yaha_b": "scene_yaha_b_1",
   "full/sleep_rem_a": "scene_sleep_rem_a_1",
   "full/sleep_rem_b": "scene_sleep_rem_b_1",
   "_fx": {
@@ -114,33 +111,6 @@
         }
       ]
     },
-    "prrr": {
-      "on": "level:dizzy",
-      "when": "hold",
-      "duration_ms": 800,
-      "cooldown_s": 1.5,
-      "motion": [
-        {
-          "target": "body",
-          "kind": "tremble",
-          "pt": 1.6,
-          "period_ms": 50
-        }
-      ]
-    },
-    "fired": {
-      "on": "level:overheat",
-      "duration_ms": 700,
-      "cooldown_s": 20,
-      "motion": [
-        {
-          "target": "body",
-          "kind": "tremble",
-          "pt": 2,
-          "period_ms": 50
-        }
-      ]
-    },
     "haa": {
       "on": "wake",
       "duration_ms": 1400,
@@ -174,22 +144,8 @@
         }
       ]
     },
-    "ear_perk": {
-      "on": "ambient",
-      "duration_ms": 900,
-      "motion": [
-        {
-          "target": "head",
-          "kind": "sway",
-          "pt": 1.5,
-          "period_ms": 450,
-          "count": 2
-        }
-      ]
-    },
     "yaha": {
       "on": "milestone",
-      "layer_mode": "full",
       "duration_ms": 2500,
       "fx": [
         {
@@ -207,9 +163,10 @@
           ]
         }
       ],
-      "frames": [
-        "full/yaha_a"
-      ]
+      "priority": 20,
+      "head": {
+        "layer": "head/normal"
+      }
     },
     "staff": {
       "on": "gesture",
@@ -231,7 +188,16 @@
       "cooldown_s": 2,
       "head": {
         "layer": "head/excited"
-      }
+      },
+      "motion": [
+        {
+          "target": "head",
+          "kind": "nod",
+          "pt": 2.0,
+          "period_ms": 500,
+          "count": 1
+        }
+      ]
     }
   },
   "_timing": {
@@ -242,16 +208,18 @@
     ],
     "burst_keys": 8
   },
-  "_anim": {
-    "pop_scale": 1.08
-  },
   "desk_empty": "desk_empty_1",
   "_expressions": {
     "head/excited": "e066-007, e015-014 '우라!' 입 크게 벌린 얼굴",
     "head/haa": "e036-024 '하아?'"
   },
   "_desk": {
-    "item": "pudding"
+    "item": "pudding",
+    "show": {
+      "full/staff_b": [
+        "right_back"
+      ]
+    }
   },
   "_erase": [
     [
@@ -260,5 +228,23 @@
       534,
       560
     ]
-  ]
+  ],
+  "_pair": {
+    "full/staff_b": {
+      "from": "full/staff_a",
+      "keep_a": [
+        [
+          819,
+          672,
+          842,
+          724
+        ]
+      ]
+    }
+  },
+  "_anim": {
+    "swing_stiffness": 6.5,
+    "swing_damping": 0.38,
+    "swing_gain": 0.0065
+  }
 }

@@ -70,8 +70,7 @@ fn every_keycode_moves_exactly_the_expected_paw() {
         let s = st(&mut p, t0);
         match zone_of(code, &keys) {
             Zone::Left => assert_eq!((s.paw_l, s.paw_r), (PawL::Down, PawR::Up), "key {code}"),
-            Zone::Center => assert_eq!((s.paw_l, s.paw_r), (PawL::Up, PawR::Center), "key {code}"),
-            Zone::Right => assert_eq!((s.paw_l, s.paw_r), (PawL::Up, PawR::Down), "key {code}"),
+            Zone::Center | Zone::Right => assert_eq!((s.paw_l, s.paw_r), (PawL::Up, PawR::Down), "key {code}"),
         }
         let s = st(&mut p, t0 + ms(120));
         assert_eq!((s.paw_l, s.paw_r), (PawL::Up, PawR::Up), "key {code} 120ms 후");
@@ -138,7 +137,7 @@ fn mouse_throttle_100ms() {
     let mut c = Converter::new(ms(100));
     let mut n = 0;
     for i in 0..100 {
-        let ev = [RawEvent::MouseMove, RawEvent::MouseDrag, RawEvent::Scroll][i % 3];
+        let ev = [RawEvent::MouseMove { dx: 2, dy: 1 }, RawEvent::MouseDrag { dx: 2, dy: 1 }, RawEvent::Scroll][i % 3];
         if c.convert(ev, t0 + ms(i as u64 * 10)).is_some() {
             n += 1;
         }
@@ -186,7 +185,7 @@ fn next_deadline_matches_paw_return() {
 #[test]
 fn mouse_move_hold_and_click() {
     let (mut p, t0) = new_pet();
-    p.on_input(Input::MouseMove, t0);
+    p.on_input(Input::MOVE, t0);
     assert_eq!(st(&mut p, t0).paw_r, PawR::Mouse);
     assert_eq!(st(&mut p, t0 + ms(999)).paw_r, PawR::Mouse);
     assert_eq!(st(&mut p, t0 + ms(1000)).paw_r, PawR::Up);
@@ -203,12 +202,12 @@ fn mouse_move_hold_and_click() {
 #[test]
 fn right_key_during_mouse_goes_to_keyboard_then_back() {
     let (mut p, t0) = new_pet();
-    p.on_input(Input::MouseMove, t0);
+    p.on_input(Input::MOVE, t0);
     p.on_input(Input::Key(37), t0 + ms(200)); // L, 오른쪽
     assert_eq!(st(&mut p, t0 + ms(210)).paw_r, PawR::Down);
     assert_eq!(st(&mut p, t0 + ms(320)).paw_r, PawR::Mouse);
     p.on_input(Input::Key(38), t0 + ms(400)); // J, 가운데
-    assert_eq!(st(&mut p, t0 + ms(410)).paw_r, PawR::Center);
+    assert_eq!(st(&mut p, t0 + ms(410)).paw_r, PawR::Down, "가운데 키도 오른발 down");
     assert_eq!(st(&mut p, t0 + ms(520)).paw_r, PawR::Mouse);
     // 왼쪽 키는 오른발에 영향 없음
     p.on_input(Input::Key(0), t0 + ms(600));
@@ -300,7 +299,7 @@ fn sleepy_after_60s_and_wakes_immediately() {
     assert_eq!(st(&mut p, t0 + ms(59_999)).head, Head::Normal);
     assert_eq!(p.next_deadline(t0 + ms(59_000)), Some(t0 + ms(60_000)));
     assert_eq!(st(&mut p, t0 + ms(60_000)).head, Head::Sleepy);
-    p.on_input(Input::MouseMove, t0 + ms(61_000));
+    p.on_input(Input::MOVE, t0 + ms(61_000));
     assert_eq!(st(&mut p, t0 + ms(61_000)).head, Head::Normal);
     assert_eq!(st(&mut p, t0 + ms(121_000)).head, Head::Sleepy);
     p.on_input(Input::Key(0), t0 + ms(122_000));
@@ -402,8 +401,8 @@ fn render_list_order_matches_plan() {
     let m = test_manifest();
     let t0 = Instant::now();
     let mut a = Animator::new(&m, 240.0, t0);
-    let s = PetState { paw_l: PawL::Down, paw_r: PawR::Center, head: Head::Normal, pose: None };
-    a.update(s, &[PetEvent::PressL, PetEvent::PressR(PawR::Center)], t0);
+    let s = PetState { paw_l: PawL::Down, paw_r: PawR::Down, head: Head::Normal, pose: None };
+    a.update(s, &[PetEvent::PressL, PetEvent::PressR(PawR::Down)], t0);
     let f = a.frame(t0 + ms(10));
     let kinds: Vec<String> = f
         .cmds
@@ -414,7 +413,7 @@ fn render_list_order_matches_plan() {
             DrawKind::Glow { .. } => "glow".into(),
         })
         .collect();
-    assert_eq!(kinds, vec!["base", "paw_l/down", "paw_r/center", "glow", "glow", "head/normal"]);
+    assert_eq!(kinds, vec!["base", "paw_l/down", "paw_r/down", "glow", "glow", "head/normal"]);
     // 앞발 레이어에는 책상/키보드 조각이 들어 있으므로 누를 때도 제자리에 그린다
     assert_eq!(f.cmds[1].offset, [0.0, 0.0]);
     assert_eq!(f.cmds[2].offset, [0.0, 0.0]);
@@ -425,29 +424,22 @@ fn render_list_order_matches_plan() {
 }
 
 #[test]
-fn crossfade_weights_sum_to_one() {
+fn head_change_swaps_at_once_and_pops() {
+    // 두 머리를 섞으면 눈/입이 두 겹으로 보이므로 바로 바꾸고, 바뀐 순간 팝 (docs/MOTION_FIX_PLAN.md P1)
     let m = test_manifest();
     let t0 = Instant::now();
     let mut a = Animator::new(&m, 240.0, t0);
     a.update(PetState::default(), &[], t0);
     a.update(PetState { head: Head::Excited, ..Default::default() }, &[], t0 + ms(10));
-    let mut saw_mix = false;
     for i in 0..30 {
         let f = a.frame(t0 + ms(10 + i * 10));
-        for c in &f.cmds {
-            if let DrawKind::Mix { a, b, t } = &c.kind {
-                saw_mix = true;
-                let (wa, wb) = (1.0 - t, *t);
-                assert!(((wa + wb) - 1.0).abs() < 1e-6);
-                assert!((0.0..=1.0).contains(t));
-                assert_eq!((a.as_str(), b.as_str()), ("head/normal", "head/excited"));
-            }
-        }
+        assert!(!f.cmds.iter().any(|c| matches!(c.kind, DrawKind::Mix { .. })), "섞지 않음");
+        assert!(f.layer_names().contains(&"head/excited") && !f.layer_names().contains(&"head/normal"));
     }
-    assert!(saw_mix);
-    // 끝나면 한 장
-    let f = a.frame(t0 + ms(400));
-    assert!(f.cmds.iter().any(|c| c.kind == DrawKind::Layer { name: "head/excited".into() }));
+    let f = a.frame(t0 + ms(80));
+    let d = f.cmds.iter().find_map(|c| c.deform.clone()).expect("팝");
+    assert!(d.head.offset[1] < 0.0, "바뀐 순간 머리를 살짝 든다 (팝) {d:?}");
+    assert!(a.frame(t0 + ms(400)).cmds.iter().all(|c| c.deform.is_none()), "팝 끝");
 }
 
 #[test]
@@ -458,7 +450,7 @@ fn level_up_pops_head_and_dizzy_wiggles() {
     a.update(PetState { head: Head::Dizzy, ..Default::default() }, &[], t0);
     let f = a.frame(t0 + ms(70));
     let d = f.cmds.iter().find_map(|c| c.deform.clone()).expect("팝은 머리 변형");
-    assert!(d.head.s[0] > 1.0 && d.head.s[1] > 1.0, "팝 {d:?}");
+    assert!(d.head.offset[1] < 0.0, "팝 {d:?}");
     let names: BTreeSet<String> = (0..20)
         .flat_map(|i| a.frame(t0 + ms(400 + i * 40)).layer_names().into_iter().map(String::from).collect::<Vec<_>>())
         .collect();
@@ -467,7 +459,7 @@ fn level_up_pops_head_and_dizzy_wiggles() {
 }
 
 #[test]
-fn sunglasses_drop_then_crossfade() {
+fn sunglasses_drop_then_swap() {
     let m = test_manifest();
     let t0 = Instant::now();
     let mut a = Animator::new(&m, 240.0, t0);
@@ -477,8 +469,10 @@ fn sunglasses_drop_then_crossfade() {
     assert!(fx.offset[1] < 0.0, "위에서 내려오는 중");
     assert!(fx.opacity > 0.0 && fx.opacity < 1.0);
     assert!(f.layer_names().contains(&"head/normal"));
-    let f = a.frame(t0 + ms(500));
-    assert!(f.cmds.iter().any(|c| matches!(&c.kind, DrawKind::Mix { b, .. } if b == "head/sunglasses")));
+    // 닿으면 섞지 않고 바로 head/sunglasses (선글라스 소품은 사라짐)
+    let f = a.frame(t0 + ms(410));
+    assert!(f.layer_names().contains(&"head/sunglasses") && !f.layer_names().contains(&"head/normal"));
+    assert!(!f.cmds.iter().any(|c| matches!(c.kind, DrawKind::Mix { .. })));
     let f = a.frame(t0 + ms(800));
     assert!(f.layer_names().contains(&"head/sunglasses"));
     assert!(!f.layer_names().contains(&"fx/sunglasses"));
@@ -490,10 +484,13 @@ fn gesture_full_frame_replaces_layers() {
     let t0 = Instant::now();
     let mut a = Animator::new(&m, 240.0, t0);
     a.update(PetState { pose: Some(Pose::Gesture), ..Default::default() }, &[], t0);
-    let mid = a.frame(t0 + ms(120));
+    // 섞지 않고 바로 장면 한 장, 바뀐 순간 몸을 살짝 눌렀다 편다 (docs/MOTION_FIX_PLAN.md P2)
+    let mid = a.frame(t0 + ms(40));
     let full = mid.cmds.last().unwrap();
-    assert_eq!(full.layers(), vec!["full/gesture"]);
-    assert!(full.opacity > 0.0 && full.opacity < 1.0);
+    assert_eq!(mid.cmds.iter().flat_map(|c| c.layers()).filter(|l| !l.starts_with("mask/")).collect::<Vec<_>>(), vec!["full/gesture"]);
+    assert_eq!(full.opacity, 1.0);
+    let d = full.deform.as_ref().expect("누르기");
+    assert!(d.body.s[0] > 1.0 && d.body.s[1] < 1.0, "{d:?}");
     let done = a.frame(t0 + ms(300));
     assert_eq!(done.layer_names(), vec!["full/gesture"]);
 }
@@ -512,7 +509,7 @@ fn idle_scene_once_per_rest_and_input_cancels() {
     assert_eq!(st(&mut p, t0 + ms(26_000)).pose, None, "6초 뒤 끝");
     assert_eq!(st(&mut p, t0 + ms(50_000)).pose, None, "한 번 쉬는 동안 한 번만");
     // 다시 쉬면 또 한다. 입력이 오면 바로 끝
-    p.on_input(Input::MouseMove, t0 + ms(51_000));
+    p.on_input(Input::MOVE, t0 + ms(51_000));
     assert_eq!(st(&mut p, t0 + ms(72_000)).pose, Some(Pose::Idle));
     p.on_input(Input::Key(0), t0 + ms(72_500));
     assert_eq!(st(&mut p, t0 + ms(72_500)).pose, None);
@@ -609,7 +606,6 @@ pt = 2.0
 [[scene.step]]
 frame = "full/gesture"
 ms = 1000
-blend_ms = 200
 
 [[scene.step]]
 frame = "head/excited"
@@ -661,29 +657,27 @@ fn idle_scene_with_zero_duration_lasts_until_input() {
     let mut bad = m.clone();
     bad.scenes[0].trigger = Pose::Milestone;
     assert!(bad.validate().is_err());
-    let mut bad = m;
+    let mut bad = m.clone();
     bad.scenes[0].steps[0].blend_ms = 5000;
     assert!(bad.validate().is_err(), "blend_ms 가 단계보다 길면 안 됨");
+    let mut bad = m;
+    bad.scenes[0].steps[0].blend_ms = 200;
+    assert!(bad.validate().is_err(), "다른 그림 사이 크로스페이드는 두 겹으로 보여서 안 됨");
 }
 
 #[test]
-fn scene_steps_blend_into_next_frame() {
+fn scene_steps_cut_to_next_frame() {
     let m = sleep_manifest();
     let t0 = Instant::now();
     let mut a = Animator::new(&m, 240.0, t0);
     a.update(PetState { pose: Some(Pose::Idle), ..Default::default() }, &[], t0);
     let mut first = |t: u64| a.frame(t0 + ms(t)).cmds[0].kind.clone();
     assert_eq!(first(500), DrawKind::Layer { name: "full/gesture".into() });
-    // 첫 단계 끝 200ms 동안 다음 프레임으로 섞는다
-    match first(900) {
-        DrawKind::Mix { a, b, t } => {
-            assert_eq!((a.as_str(), b.as_str()), ("full/gesture", "head/excited"));
-            assert!(t > 0.0 && t < 1.0, "블렌드 중간 {t}");
-        }
-        k => panic!("블렌드가 아님: {k:?}"),
-    }
+    // 다른 그림은 섞지 않고 단계가 끝나는 순간 바로 바꾼다
+    assert_eq!(first(999), DrawKind::Layer { name: "full/gesture".into() });
+    assert_eq!(first(1000), DrawKind::Layer { name: "head/excited".into() });
     assert_eq!(first(1200), DrawKind::Layer { name: "head/excited".into() });
-    // 둘째 단계는 블렌드가 없어 한 번에 넘어가고 반복한다 (주기 1500ms)
+    // 반복한다 (주기 1500ms)
     assert_eq!(first(1499), DrawKind::Layer { name: "head/excited".into() });
     assert_eq!(first(1600), DrawKind::Layer { name: "full/gesture".into() });
     assert_eq!(a.full_layer(t0 + ms(1600)), Some("full/gesture"));
@@ -742,7 +736,6 @@ fn missing_layers_fall_back_to_existing_ones() {
     let have: BTreeSet<String> = ["base", "head/normal", "paw_l/up", "paw_r/up", "paw_r/down"].iter().map(|s| s.to_string()).collect();
     let l = Layers::new(have.clone());
     assert_eq!(l.resolve("head/dizzy_wiggle").as_deref(), Some("head/normal"));
-    assert_eq!(l.resolve("paw_r/center").as_deref(), Some("paw_r/down"));
     assert_eq!(l.resolve("paw_r/mouse_click").as_deref(), Some("paw_r/up"));
     assert_eq!(l.resolve("paw_l/down").as_deref(), Some("paw_l/up"));
     assert_eq!(l.resolve("full/gesture"), None);
@@ -791,67 +784,225 @@ fn clamp_size_range() {
 
 // ---------- 마우스 연출 ----------
 
-fn swing_manifest() -> Manifest {
+const RIG_ROOT: [f32; 2] = [300.0, 300.0];
+const RIG_TIP: [f32; 2] = [400.0, 380.0];
+const RIG_RANGE: [[f32; 2]; 2] = [[-20.0, 10.0], [-8.0, 6.0]];
+
+/// _test 에 마우스 리그를 얹는다 (레이어 이름만 있으면 된다. 그림은 그리지 않는다).
+fn rig_manifest() -> Manifest {
     let mut m = test_manifest();
     assert!(m.masks.contains_key("warp"), "_test 에 mask/warp 가 있어야 한다 (art/scripts/warp_field.py)");
-    m.swing = Some(typing_pet::config::Swing { max_px: [6.0, 4.0] });
+    m.layers.extend(["fx/mouse".to_string(), "fx/mouse_arm".to_string()]);
+    m.mouse = Some(typing_pet::config::MouseRig { root: RIG_ROOT, tip: RIG_TIP, hand: 0.72, range: RIG_RANGE });
     m
 }
 
+/// 마우스 시나리오 한 단계: (입력, 시각) 을 Pet/Animator 에 넣는다.
+fn feed(pet: &mut Pet, a: &mut Animator, i: Input, t: Instant) {
+    pet.on_input(i, t);
+    let ev = pet.drain_events();
+    a.update(pet.state(t), &ev, t);
+}
+
+/// 이 프레임의 (마우스 이동, 손 이동). 마우스 리그를 그리지 않으면 None. 마우스 위에 팔을 그린다.
+fn rig(a: &mut Animator, t: Instant) -> Option<([f32; 2], [f32; 2])> {
+    let f = a.frame(t);
+    let at = |name: &str| f.cmds.iter().position(|c| c.layers().contains(&name));
+    let (mi, ai) = (at("fx/mouse")?, at("fx/mouse_arm")?);
+    assert!(mi < ai, "팔은 마우스 위에");
+    let b = f.cmds[ai].bend.expect("팔 기울이기");
+    assert_eq!((b.root, b.tip), (RIG_ROOT, RIG_TIP));
+    assert_eq!(f.cmds[ai].offset, [0.0, 0.0], "팔 그림 자체는 옮기지 않는다 (어깨 고정)");
+    Some((f.cmds[mi].offset, b.d))
+}
+
+/// 손이 마우스 위에 있을 때의 이동 (마우스와 같다). 리그를 그리지 않거나 제자리면 0.
+fn hand(a: &mut Animator, t: Instant) -> [f32; 2] {
+    match rig(a, t) {
+        Some((m, h)) => {
+            assert!((m[0] - h[0]).abs() < 1e-3 && (m[1] - h[1]).abs() < 1e-3, "손과 마우스는 한 덩어리: {m:?} {h:?}");
+            m
+        }
+        None => [0.0; 2],
+    }
+}
+
+fn body_lean(a: &mut Animator, t: Instant) -> f32 {
+    a.frame(t).cmds.iter().find_map(|c| c.deform.as_ref().map(|d| d.body.offset[0])).unwrap_or(0.0)
+}
+
+/// 오른쪽으로 dur 동안 33ms 마다 dx 만큼 움직인다. 끝난 시각을 돌려준다.
+fn sweep(pet: &mut Pet, a: &mut Animator, from: Instant, dur: u64, dx: i32) -> Instant {
+    let mut t = from;
+    for k in 0..dur / 33 {
+        t = from + ms(k * 33);
+        feed(pet, a, Input::MouseMove { dx, dy: 0 }, t);
+    }
+    t
+}
+
 #[test]
-fn mouse_move_slides_hand_with_one_deform() {
-    let m = swing_manifest();
+fn mouse_move_carries_summed_delta() {
+    let t0 = Instant::now();
+    let mut c = Converter::new(ms(33));
+    assert_eq!(c.convert(RawEvent::MouseMove { dx: 5, dy: -1 }, t0), Some(Input::MouseMove { dx: 5, dy: -1 }));
+    // 쓰로틀 안의 이동은 모아서 다음에
+    assert_eq!(c.convert(RawEvent::MouseMove { dx: 3, dy: 1 }, t0 + ms(10)), None);
+    assert_eq!(c.convert(RawEvent::MouseDrag { dx: 4, dy: 2 }, t0 + ms(20)), None);
+    assert_eq!(c.convert(RawEvent::MouseMove { dx: 1, dy: 0 }, t0 + ms(40)), Some(Input::MouseMove { dx: 8, dy: 3 }));
+    // 스크롤은 방향 없음
+    assert_eq!(c.convert(RawEvent::Scroll, t0 + ms(80)), Some(Input::MOVE));
+    assert_eq!(typing_pet::config::Timing::default().mouse_throttle_ms, 33);
+}
+
+#[test]
+fn hand_and_mouse_follow_cursor_within_pad_range() {
+    let m = rig_manifest();
     let t0 = Instant::now();
     let mut pet = Pet::new(m.timing.clone(), m.keys.clone(), t0);
     let mut a = Animator::new(&m, 240.0, t0);
-    // 100ms 마다 마우스 이동 1초
-    for k in 0..10 {
-        let t = t0 + ms(k * 100);
-        pet.on_input(Input::MouseMove, t);
-        let ev = pet.drain_events();
-        assert!(ev.contains(&PetEvent::MouseMove));
-        a.update(pet.state(t), &ev, t);
+    let t = sweep(&mut pet, &mut a, t0, 400, 40);
+    assert!(a.frame(t).layer_names().contains(&"paw_r/mouse"));
+    let h = hand(&mut a, t);
+    assert!(h[0] > 0.5 * RIG_RANGE[0][1], "커서를 오른쪽으로 -> 손도 오른쪽 {h:?}");
+    // 몸이 손 쪽으로 늦게 기운다 (손보다 작게)
+    let lean = body_lean(&mut a, t);
+    assert!(lean > 0.0 && lean < h[0] * 0.5, "{lean}");
+    // 왼쪽으로 바꾸면 손도 왼쪽으로. 패드 왼쪽이 더 넓으면 더 멀리 간다
+    let t = sweep(&mut pet, &mut a, t + ms(33), 400, -40);
+    let h = hand(&mut a, t);
+    assert!(h[0] < 0.5 * RIG_RANGE[0][0], "{h:?}");
+    // 어느 때나 패드 안
+    for k in 0..60 {
+        let h = hand(&mut a, t + ms(k * 10));
+        assert!(h[0] >= RIG_RANGE[0][0] - 1e-3 && h[0] <= RIG_RANGE[0][1] + 1e-3 && h[1] >= RIG_RANGE[1][0] - 1e-3 && h[1] <= RIG_RANGE[1][1] + 1e-3, "{h:?}");
     }
-    let f = a.frame(t0 + ms(950));
-    assert!(f.layer_names().contains(&"paw_r/mouse"));
-    // 캐릭터 레이어는 모두 같은 변형으로(이음매 없이), 자리 이동/배율은 없다. 변위는 최대 변위의 90% 안
-    let mut moved = 0;
-    for k in 0..12 {
-        let f = a.frame(t0 + ms(300 + k * 25));
-        let defs: Vec<_> = f.cmds.iter().filter_map(|c| c.deform.clone()).collect();
-        if let Some(d) = defs.first() {
-            assert!(defs.iter().all(|x| x == d), "레이어마다 다른 변형");
-            assert!(d.mouse[0].abs() <= 6.0 * 0.9 + 1e-3 && d.mouse[1].abs() <= 4.0 * 0.9 + 1e-3, "{:?}", d.mouse);
-            if d.mouse[0].abs() > 1.0 {
-                moved += 1;
-            }
-        }
-        for c in f.cmds.iter().filter(|c| c.deform.is_some()) {
-            assert_eq!((c.offset, c.scale), ([0.0, 0.0], 1.0));
-        }
-    }
-    assert!(moved >= 6, "흔들리는 프레임 {moved}");
-    assert!(a.animating(t0 + ms(950)));
-    // 마지막 이동(900ms) 뒤 hold + fade 가 지나면 멈춘다 (손은 아직 마우스 위)
-    let t = t0 + ms(900 + m.anim.swing_hold_ms + m.anim.swing_fade_ms + 10);
+    assert!(a.animating(t));
+}
+
+#[test]
+fn hand_overshoots_once_when_cursor_stops_then_settles() {
+    let m = rig_manifest();
+    let t0 = Instant::now();
+    let mut pet = Pet::new(m.timing.clone(), m.keys.clone(), t0);
+    let mut a = Animator::new(&m, 240.0, t0);
+    let stop = sweep(&mut pet, &mut a, t0, 500, 40);
+    let x0 = hand(&mut a, stop)[0];
+    assert!(x0 > 0.0);
+    let xs: Vec<f32> = (1..=40).map(|k| hand(&mut a, stop + ms(k * 10))[0]).collect();
+    let low = xs.iter().cloned().fold(f32::INFINITY, f32::min);
+    assert!(low < -0.08 * x0, "멈추면 반대쪽으로 한 번 넘쳤다 돌아온다: x0={x0} low={low} {xs:?}");
+    assert!(low > -0.5 * x0, "넘침은 작게: {low}");
+    // 0.9초 뒤에는 손이 마우스 위에 가만히 (mouse_hold_ms 1초)
+    let t = stop + ms(900);
     pet.advance(t);
     a.update(pet.state(t), &pet.drain_events(), t);
-    assert_eq!(pet.state(t).paw_r, PawR::Mouse);
-    let f = a.frame(t);
-    assert!(f.cmds.iter().all(|c| c.deform.is_none()), "멈추면 변형 없이 원래 그림");
+    assert!(matches!(pet.state(t).paw_r, PawR::Mouse));
+    assert_eq!(rig(&mut a, t), Some(([0.0; 2], [0.0; 2])), "멈추면 제자리");
+    assert!(a.frame(t).cmds.iter().all(|c| c.deform.is_none()));
     assert!(!a.animating(t));
 }
 
 #[test]
-fn mouse_pose_without_field_is_one_layer() {
-    let mut m = test_manifest();
-    m.masks.remove("warp");
+fn directionless_moves_still_wiggle_and_stop() {
+    let m = rig_manifest();
+    let t0 = Instant::now();
+    let mut pet = Pet::new(m.timing.clone(), m.keys.clone(), t0);
+    let mut a = Animator::new(&m, 240.0, t0);
+    for k in 0..10 {
+        feed(&mut pet, &mut a, Input::MOVE, t0 + ms(k * 100));
+    }
+    let moved = (0..12).filter(|k| hand(&mut a, t0 + ms(300 + k * 25))[0].abs() > 1.0).count();
+    assert!(moved >= 6, "흔들리는 프레임 {moved}");
+    let t = t0 + ms(900 + m.anim.swing_hold_ms + m.anim.swing_fade_ms + 900);
+    pet.advance(t);
+    a.update(pet.state(t), &pet.drain_events(), t);
+    assert_eq!(hand(&mut a, t), [0.0; 2]);
+}
+
+#[test]
+fn click_presses_hand_down_and_back() {
+    let m = rig_manifest();
+    let t0 = Instant::now();
+    let mut pet = Pet::new(m.timing.clone(), m.keys.clone(), t0);
+    let mut a = Animator::new(&m, 240.0, t0);
+    feed(&mut pet, &mut a, Input::MOVE, t0);
+    let t = t0 + ms(1200);
+    feed(&mut pet, &mut a, Input::MouseClick, t);
+    // 클릭으로 마우스를 다시 잡는 동안(130ms)은 손이 오는 중이라 마우스 이동만 본다
+    let ys: Vec<f32> = (1..=30).map(|k| rig(&mut a, t + ms(k * 10)).map_or(0.0, |(m, _)| m[1])).collect();
+    let peak = ys.iter().cloned().fold(0.0, f32::max);
+    let pt = m.canvas as f32 / 240.0;
+    let want = (m.anim.swing_click_pt * pt).min(RIG_RANGE[1][1]);
+    assert!((peak - want).abs() < 0.25 * want, "클릭 눌림 {peak} (기대 {want}) {ys:?}");
+    assert!(ys.last().unwrap().abs() < 0.3 * want, "돌아온다 {ys:?}");
+}
+
+#[test]
+fn calm_mode_shrinks_swing() {
+    let m = rig_manifest();
+    let t0 = Instant::now();
+    let peak = |calm: bool| {
+        let mut pet = Pet::new(m.timing.clone(), m.keys.clone(), t0);
+        let mut a = Animator::new(&m, 240.0, t0);
+        a.cue_behaviors = !calm;
+        let t = sweep(&mut pet, &mut a, t0, 500, 40);
+        (hand(&mut a, t)[0], body_lean(&mut a, t))
+    };
+    let (full, lean) = peak(false);
+    let (calm, calm_lean) = peak(true);
+    assert!(calm < 0.6 * full && calm > 0.0, "{calm} vs {full}");
+    assert!(lean > 0.0 && calm_lean == 0.0);
+}
+
+#[test]
+fn hand_reaches_for_the_mouse_and_returns() {
+    let m = rig_manifest();
+    let t0 = Instant::now();
+    let mut a = Animator::new(&m, 240.0, t0);
+    let toward_root = |d: [f32; 2]| d[0] * (RIG_ROOT[0] - RIG_TIP[0]) + d[1] * (RIG_ROOT[1] - RIG_TIP[1]);
+    let mouse = PetState { paw_r: PawR::Mouse, ..Default::default() };
+    a.update(mouse, &[], t0);
+    // 잡으러 가는 중: 마우스는 제자리, 손은 어깨 쪽에서 온다
+    let (mo, h) = rig(&mut a, t0 + ms(20)).expect("마우스 자세");
+    assert_eq!(mo, [0.0; 2]);
+    assert!(toward_root(h) > 0.0, "{h:?}");
+    assert!(a.animating(t0 + ms(20)));
+    let (_, h2) = rig(&mut a, t0 + ms(80)).unwrap();
+    assert!(toward_root(h2) < toward_root(h), "점점 마우스로");
+    assert_eq!(rig(&mut a, t0 + ms(300)), Some(([0.0; 2], [0.0; 2])));
+    assert!(!a.animating(t0 + ms(300)));
+    // 놓고 돌아가는 중: 마우스 자세 바탕 그대로, 손이 어깨 쪽으로 간다
+    let t1 = t0 + ms(1000);
+    a.update(PetState::default(), &[], t1);
+    let f = a.frame(t1 + ms(60));
+    assert!(f.layer_names().contains(&"paw_r/mouse"), "{:?}", f.layer_names());
+    let (mo, h) = rig(&mut a, t1 + ms(60)).expect("돌아가는 중");
+    assert_eq!(mo, [0.0; 2]);
+    assert!(toward_root(h) > 0.0);
+    assert!(a.animating(t1 + ms(60)));
+    // 끝나면 원래 앞발
+    let f = a.frame(t1 + ms(200));
+    assert!(rig(&mut a, t1 + ms(200)).is_none() && !f.layer_names().contains(&"paw_r/mouse"));
+    assert!(!a.animating(t1 + ms(200)));
+    // 키를 누르러 가면 바로 (누른 앞발이 늦게 보이지 않게)
+    a.update(mouse, &[], t1 + ms(1000));
+    a.update(PetState { paw_r: PawR::Down, ..Default::default() }, &[], t1 + ms(2000));
+    let f = a.frame(t1 + ms(2010));
+    assert!(rig(&mut a, t1 + ms(2010)).is_none() && f.layer_names().contains(&"paw_r/down"));
+}
+
+#[test]
+fn mouse_pose_without_rig_is_one_layer() {
+    let m = test_manifest();
+    assert!(m.mouse.is_none());
     let t0 = Instant::now();
     let mut a = Animator::new(&m, 240.0, t0);
     let s = PetState { paw_r: PawR::Mouse, ..Default::default() };
-    a.update(s, &[PetEvent::MouseMove], t0);
+    a.update(s, &[PetEvent::MouseMove { dx: 0, dy: 0 }], t0);
     let f = a.frame(t0 + ms(50));
     assert!(f.layer_names().contains(&"paw_r/mouse"));
+    assert!(rig(&mut a, t0 + ms(50)).is_none());
     assert!(f.cmds.iter().all(|c| c.deform.is_none()));
     assert!(!a.animating(t0 + ms(50)));
 }

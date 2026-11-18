@@ -37,9 +37,7 @@ impl Default for Config {
 /// 처음 실행할 때의 직군.
 pub const DEFAULT_JOB: &str = "basic";
 
-pub const SIZES: [f64; 5] = [160.0, 200.0, 240.0, 320.0, 400.0];
-
-/// 자유 크기 조절(스크롤/핀치) 범위 (pt).
+/// 크기 조절(틀/스크롤/핀치) 범위 (pt).
 pub const MIN_SIZE: f64 = 80.0;
 pub const MAX_SIZE: f64 = 800.0;
 
@@ -92,7 +90,7 @@ pub struct Manifest {
     pub title: Option<String>,
     /// 캔버스 크기 (px). 모든 레이어가 이 크기의 정사각형이어야 한다.
     pub canvas: u32,
-    /// layers/ 아래 PNG 이름 (확장자 제외). 예: "base", "head/normal", "paw_r/center".
+    /// layers/ 아래 PNG 이름 (확장자 제외). 예: "base", "head/normal", "paw_r/down".
     pub layers: Vec<String>,
     /// 머리 확대(팝)와 숨쉬기의 기준점 (캔버스 px). 보통 턱 아래 가운데.
     pub head_anchor: [f32; 2],
@@ -103,9 +101,9 @@ pub struct Manifest {
     /// 마스크가 있는 레이어는 "마스크 안은 이 레이어로 교체" 로 그린다 (base 의 귀를 지울 수 있게).
     #[serde(default)]
     pub masks: BTreeMap<String, String>,
-    /// 마우스 연출 축. 없으면 마우스 자세는 한 장으로 가만히 있다.
+    /// 마우스 리그 (팔, 손, 마우스). 없으면 마우스 자세는 한 장으로 가만히 있다.
     #[serde(default)]
-    pub swing: Option<Swing>,
+    pub mouse: Option<MouseRig>,
     /// 애니 장면 연출 (`[[scene]]`). 발동 조건별로 여러 개면 돌아가며 쓴다.
     /// 읽을 때 `layer_mode = "full"` 인 behavior 로 바꿔 쓴다 ([`Manifest::all_behaviors`]).
     #[serde(default, rename = "scene")]
@@ -152,12 +150,26 @@ pub struct Desk {
     pub hide: BTreeMap<String, Vec<String>>,
 }
 
-/// 마우스 연출: 마우스를 움직이는 동안 손과 마우스를 `mask/warp` 의 B 채널만큼 민다 (docs/MOTION_QA.md).
+/// 마우스 리그: 마우스를 쓰는 동안 `paw_r/mouse` (앞발을 지운 몸, 빈 패드) 위에 `fx/mouse` 와 `fx/mouse_arm` 을 그린다.
+/// 손과 마우스는 한 덩어리로 패드 위를 움직이고, 팔은 어깨에 붙은 채 손을 따라 기운다 (docs/MOTION_QA.md, art/scripts/mouse_rig.py).
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct Swing {
-    /// 접히지 않고 밀 수 있는 최대 변위 (캔버스 px, 가로/세로). art/scripts/warp_field.py 가 계산한다.
-    pub max_px: [f32; 2],
+pub struct MouseRig {
+    /// 어깨 (캔버스 px). 팔 그림에서 움직이지 않는 곳.
+    pub root: [f32; 2],
+    /// 쉬는 자리의 손 가운데 (캔버스 px).
+    pub tip: [f32; 2],
+    /// root(0) ~ tip(1) 축에서 손이 시작하는 곳. 여기부터는 마우스와 똑같이 움직인다.
+    #[serde(default = "MouseRig::default_hand")]
+    pub hand: f32,
+    /// 손과 마우스가 갈 수 있는 범위 (캔버스 px): [[왼쪽, 오른쪽], [위, 아래]]. 마우스가 패드 안에 남는 만큼.
+    pub range: [[f32; 2]; 2],
+}
+
+impl MouseRig {
+    fn default_hand() -> f32 {
+        0.72
+    }
 }
 
 /// 애니메이션 장면 하나: 전체 프레임 레이어 여러 장을 `frame_ms` 마다 돌려 그린다.
@@ -211,7 +223,8 @@ impl Scene {
 pub struct Step {
     pub frame: String,
     pub ms: u64,
-    /// 이 단계의 끝 blend_ms 동안 다음 단계 프레임으로 크로스페이드.
+    /// 이 단계의 끝 blend_ms 동안 다음 단계 프레임으로 크로스페이드. 같은 그림끼리만 쓸 수 있다
+    /// (다른 그림을 섞으면 두 겹으로 보여서 엔진은 다른 그림 사이를 바로 교체한다).
     #[serde(default)]
     pub blend_ms: u64,
 }
@@ -388,7 +401,7 @@ impl Behavior {
 
     /// 2장 교대만 하는 게 아니라 실제로 움직이는가 (motion, 소품, 숨쉬기, 크로스페이드).
     pub fn moves(&self) -> bool {
-        !self.motion.is_empty() || !self.fx.is_empty() || self.breathe.is_some() || self.steps.iter().any(|s| s.blend_ms > 0)
+        !self.motion.is_empty() || !self.fx.is_empty() || self.breathe.is_some()
     }
 
     /// 기존 `[[scene]]` 을 full behavior 로.
@@ -433,7 +446,7 @@ impl MotionKind {
     fn defaults(self) -> (f32, u64) {
         match self {
             MotionKind::Hop => (6.0, 450),
-            MotionKind::Tremble => (1.2, 70),
+            MotionKind::Tremble => (1.2, 100),
             MotionKind::Sway => (2.5, 1200),
             MotionKind::Nod => (3.0, 500),
             MotionKind::Squash => (0.0, 300),
@@ -564,7 +577,7 @@ impl Default for Timing {
             paw_down_ms: 120,
             click_ms: 120,
             mouse_hold_ms: 1000,
-            mouse_throttle_ms: 100,
+            mouse_throttle_ms: 33,
             half_life_s: 3.0,
             min_dwell_ms: 1500,
             level_up: [12.0, 22.0, 32.0],
@@ -591,8 +604,11 @@ impl Default for Timing {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Anim {
-    pub head_fade_ms: u64,
+    /// 머리를 바꾸는 순간의 팝 (pop_ms 동안 머리를 pop_pt 만큼 들었다 내림, pop_scale 배 키움).
+    /// 바꾸기는 섞지 않고 바로 교체한다 (섞으면 두 그림이 두 겹으로 보임, docs/MOTION_FIX_PLAN.md).
+    /// 배율 팝은 머리가 클수록 귀 끝이 많이 밀려서 기본은 들기만 (변위 상한 12px, docs/MOTION_QA.md T3).
     pub pop_ms: u64,
+    pub pop_pt: f32,
     pub pop_scale: f32,
     pub glow_ms: u64,
     pub glow_r0_pt: f32,
@@ -602,24 +618,38 @@ pub struct Anim {
     pub wiggle_ms: u64,
     pub sunglasses_drop_ms: u64,
     pub sunglasses_drop_pt: f32,
-    pub pose_fade_ms: u64,
+    /// 장면(full)이 바뀌는 순간 몸을 이만큼 납작하게 눌렀다 편다 (가로 +, 세로 -).
+    pub swap_ms: u64,
+    pub swap_squash: f32,
     pub breathe_period_s: f32,
     pub breathe_pt: f32,
     pub breathe_fps: f32,
-    /// 마우스 연출: 손끝 흔들림 폭 (pt, 가로/세로), 초당 왕복 수.
+    /// 마우스 연출: 손과 마우스가 움직이는 최대 폭 (pt, 가로/세로). 패드 안 범위(`[mouse] range`)가 더 좁으면 그쪽.
     pub swing_pt: [f32; 2],
+    /// 방향 없는 이동(스크롤, 렌더 시나리오)일 때 목표 위치의 8자 왕복 (초당 왕복 수).
     pub swing_hz: f32,
-    /// 마지막 마우스 이동 뒤 이만큼은 계속 흔들고, 이후 `swing_fade_ms` 동안 멈춘다.
+    /// 마지막 마우스 이동 뒤 이만큼은 목표를 유지하고, 이후 `swing_fade_ms` 동안 목표를 0 으로 (방향 없는 이동).
     pub swing_hold_ms: u64,
     pub swing_fade_ms: u64,
+    /// 손 스프링: 고유 진동수 (Hz). 클수록 커서를 빨리 따라간다.
+    pub swing_stiffness: f32,
+    /// 손 스프링 감쇠비 (0~1). 작을수록 멈출 때 크게 넘쳤다 돌아온다.
+    pub swing_damping: f32,
+    /// 커서 속도 (pt/s) -> 손 목표 위치 (pt) 배율 (s). 빠르게 흔들수록 크게 (swing_pt 까지).
+    pub swing_gain: f32,
+    /// 몸이 손을 따라 기우는 비율 (손 변위 대비)과 늦는 시간 (ms).
+    pub swing_lean: f32,
+    pub swing_lean_ms: u64,
+    /// 클릭 순간 손이 눌렸다 돌아오는 깊이 (pt).
+    pub swing_click_pt: f32,
 }
 
 impl Default for Anim {
     fn default() -> Self {
         Self {
-            head_fade_ms: 120,
             pop_ms: 200,
-            pop_scale: 1.04,
+            pop_pt: 1.5,
+            pop_scale: 1.0,
             glow_ms: 220,
             glow_r0_pt: 10.0,
             glow_r1_pt: 16.0,
@@ -627,14 +657,21 @@ impl Default for Anim {
             wiggle_ms: 80,
             sunglasses_drop_ms: 400,
             sunglasses_drop_pt: 30.0,
-            pose_fade_ms: 250,
+            swap_ms: 110,
+            swap_squash: 0.015,
             breathe_period_s: 3.0,
             breathe_pt: 1.5,
             breathe_fps: 30.0,
-            swing_pt: [2.0, 0.25],
+            swing_pt: [6.5, 2.5],
             swing_hz: 3.5,
             swing_hold_ms: 200,
             swing_fade_ms: 150,
+            swing_stiffness: 5.5,
+            swing_damping: 0.45,
+            swing_gain: 0.0052,
+            swing_lean: 0.08,
+            swing_lean_ms: 80,
+            swing_click_pt: 0.8,
         }
     }
 }
@@ -772,6 +809,9 @@ impl Manifest {
             if tl.iter().any(|s| s.ms == 0 || s.blend_ms > s.ms) {
                 return Err(format!("장면 {} 의 단계 길이는 0 보다 크고 blend_ms 이상이어야 함", sc.name));
             }
+            if let Some(s) = blend_across(&tl) {
+                return Err(format!("장면 {}: {s} 의 blend_ms 는 다음 단계가 같은 그림일 때만 (다른 그림을 섞으면 두 겹으로 보임)", sc.name));
+            }
             if sc.duration_ms == Some(0) && sc.trigger != Pose::Idle {
                 return Err(format!("장면 {}: duration_ms = 0 (입력까지 계속)은 idle 장면만 쓸 수 있음", sc.name));
             }
@@ -825,6 +865,9 @@ impl Manifest {
                     return Err("overlay 인데 motion/fx/head 가 하나도 없음".into());
                 }
             }
+        }
+        if let Some(s) = blend_across(&tl) {
+            return Err(format!("{s} 의 blend_ms 는 다음 단계가 같은 그림일 때만 (다른 그림을 섞으면 두 겹으로 보임)"));
         }
         if tl.iter().any(|s| s.ms == 0 || s.blend_ms > s.ms) {
             return Err("단계 길이는 0 보다 크고 blend_ms 이상이어야 함".into());
@@ -989,4 +1032,10 @@ impl Manifest {
     pub fn allows_head(&self, layer: &str) -> bool {
         !layer.starts_with("head/") || layer == "head/normal" || self.expressions.contains_key(layer)
     }
+}
+
+/// 다음 단계와 그림이 다른데 blend_ms 가 있는 단계의 그림 이름.
+fn blend_across(tl: &[Step]) -> Option<String> {
+    let n = tl.len();
+    (0..n).find(|&i| tl[i].blend_ms > 0 && tl[i].frame != tl[(i + 1) % n].frame).map(|i| tl[i].frame.clone())
 }

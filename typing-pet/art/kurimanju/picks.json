@@ -4,9 +4,8 @@
   "base": "base_final",
   "paw_l/down": "left_down_2",
   "paw_r/down": "right_down_2",
-  "paw_r/center": "right_center_1",
-  "paw_r/mouse": "mouse_1",
-  "paw_r/mouse_click": "mouse_click_1",
+  "paw_r/mouse": "mouse_short_3",
+  "paw_r/mouse_click": "mouse_click_short_3",
   "head/excited": "head_haa_2",
   "head/dizzy": "head_flushed_1",
   "head/overheat": "head_flushed_1",
@@ -17,7 +16,7 @@
   "full/kuri_drink_a": "scene_haa_a_1",
   "full/kuri_drink_b": "scene_haa_b_1",
   "full/kuri_pass_a": "scene_pass_a_1",
-  "full/kuri_order_a": "scene_order_a_1",
+  "full/kuri_order_a": "scene_order_a_paw_2",
   "base_clean": "base_clean_2",
   "_expressions": {
     "head/excited": "e244@00:23, e35@00:09, e180@00:09: 한 모금 마신 뒤 입 크게 벌리고 송곳니 보이며 하아~ (입 위 주름선)",
@@ -27,7 +26,7 @@
     "head/savor": "e244@00:12, e35@00:18: 입 위 주름선과 넓은 ω 입으로 맛을 음미"
   },
   "_desk": {
-    "item": "sake_cup"
+    "item": "onecup"
   },
   "_fx": {
     "kuri_steam": {
@@ -55,13 +54,11 @@
       "step": [
         {
           "frame": "full/kuri_drink_a",
-          "ms": 1400,
-          "blend_ms": 200
+          "ms": 1400
         },
         {
           "frame": "full/kuri_drink_b",
-          "ms": 1800,
-          "blend_ms": 200
+          "ms": 1800
         }
       ],
       "fx": [
@@ -106,7 +103,7 @@
         {
           "target": "body",
           "kind": "squash",
-          "squash": 0.06,
+          "squash": 0.025,
           "period_ms": 500,
           "count": 1
         }
@@ -145,7 +142,7 @@
         {
           "target": "body",
           "kind": "squash",
-          "squash": 0.04,
+          "squash": 0.025,
           "period_ms": 600,
           "count": 1
         }
@@ -224,7 +221,10 @@
     ]
   },
   "_anim": {
-    "pop_scale": 1.03,
-    "glow_ms": 260
+    "glow_ms": 260,
+    "swing_stiffness": 4.0,
+    "swing_damping": 0.6,
+    "swing_lean": 0.12,
+    "swing_lean_ms": 140
   }
 }

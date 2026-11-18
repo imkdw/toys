@@ -243,3 +243,61 @@ pub fn cloud(label: &str, h: u32) -> Option<SrcImage> {
     drop(cv);
     Some(SrcImage { w: w as u32, h: hh as u32, data })
 }
+
+
+/// 크기 조절 틀 안내문 (여러 줄, 반투명 어두운 알약 + 흰 글자). 너비는 `max_w` px 안으로 줄인다.
+/// `scale` 은 화면 배율. premultiplied RGBA.
+pub fn hint(lines: &[&str], max_w: u32, scale: f32) -> Option<SrcImage> {
+    let scale = scale.max(1.0) as f64;
+    let measure = |size: f64| -> Option<Vec<(Line, CGRect)>> {
+        let probe = Canvas::new(1, 1)?;
+        let mut v = Vec::new();
+        for l in lines {
+            let line = Line::new(l, size)?;
+            let b = unsafe { CTLineGetImageBounds(line.0, probe.ctx) };
+            v.push((line, b));
+        }
+        Some(v)
+    };
+    let mut size = 11.0 * scale;
+    let mut ls = measure(size)?;
+    let widest = |ls: &[(Line, CGRect)]| ls.iter().map(|(_, b)| b.s.w).fold(0.0, f64::max);
+    let pad_x = |size: f64| size * 0.9;
+    let fit = max_w as f64;
+    let need = widest(&ls) + pad_x(size) * 2.0;
+    if need > fit {
+        // 글자 크기에 비례하므로 한 번에 맞춘다
+        size *= fit / need;
+        if size < 6.0 * scale.min(1.5) {
+            return None;
+        }
+        ls = measure(size)?;
+    }
+    let line_h = size * 1.35;
+    let pad_y = size * 0.55;
+    let bw = widest(&ls) + pad_x(size) * 2.0;
+    let bh = line_h * ls.len() as f64 + pad_y * 2.0;
+    let (w, h) = (bw.ceil() as usize, bh.ceil() as usize);
+    let cv = Canvas::new(w, h)?;
+    unsafe {
+        let ctx = cv.ctx;
+        let r = (bh / 2.0).min(size * 0.9);
+        let path = CGPathCreateWithRoundedRect(CGRect { o: CGPoint { x: 0.0, y: 0.0 }, s: CGSize { w: w as f64, h: h as f64 } }, r, r, std::ptr::null());
+        CGContextSetRGBFillColor(ctx, 0.08, 0.07, 0.08, 0.72);
+        CGContextAddPath(ctx, path);
+        CGContextDrawPath(ctx, FILL);
+        CGPathRelease(path);
+        CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
+        for (i, (line, b)) in ls.iter().enumerate() {
+            // CG 좌표는 아래가 원점: 첫 줄이 맨 위
+            let cy = h as f64 - pad_y - line_h * (i as f64 + 0.5);
+            let cx = w as f64 / 2.0;
+            CGContextSetTextPosition(ctx, cx - (b.o.x + b.s.w / 2.0), cy - (b.o.y + b.s.h / 2.0));
+            CTLineDraw(line.0, ctx);
+        }
+    }
+    let mut cv = cv;
+    let data = std::mem::take(&mut cv.data);
+    drop(cv);
+    Some(SrcImage { w: w as u32, h: h as u32, data })
+}

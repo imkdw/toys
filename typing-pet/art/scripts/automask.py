@@ -28,7 +28,7 @@ MASKS = ROOT / "art/usagi/masks"
 
 GROUPS = {
     "paw_l": ["paw_l/down"],
-    "paw_r": ["paw_r/down", "paw_r/center", "paw_r/mouse", "paw_r/mouse_click"],
+    "paw_r": ["paw_r/down", "paw_r/mouse", "paw_r/mouse_click"],
     "head": ["head/excited", "head/dizzy", "head/overheat", "head/sleepy", "head/sunglasses"],
 }
 MARGIN = 10
@@ -134,7 +134,7 @@ def main() -> None:
 
     # 발끝 좌표, 머리 기준점
     geo = {"tips": {}, "head_anchor": None}
-    for layer in ["paw_l/down", "paw_r/down", "paw_r/center", "paw_r/mouse_click"]:
+    for layer in ["paw_l/down", "paw_r/down", "paw_r/mouse_click"]:
         if layer in diffs:
             geo["tips"][layer] = tip(diffs[layer])
     head_alpha = (base[..., 3] > 128).astype(np.uint8)

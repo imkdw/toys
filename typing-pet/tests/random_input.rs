@@ -23,8 +23,8 @@ fn raw() -> impl Strategy<Value = RawEvent> {
             let (code, _, dev, gen_) = MODIFIERS[i];
             RawEvent::FlagsChanged { code, flags: if d { dev | gen_ } else { 0 } }
         }),
-        2 => Just(RawEvent::MouseMove),
-        1 => Just(RawEvent::MouseDrag),
+        2 => (-50i32..50, -50i32..50).prop_map(|(dx, dy)| RawEvent::MouseMove { dx, dy }),
+        1 => Just(RawEvent::MouseDrag { dx: 3, dy: 0 }),
         1 => Just(RawEvent::Scroll),
         1 => Just(RawEvent::MouseDown),
     ]
@@ -108,7 +108,7 @@ proptest! {
         prop_assert!(st.pose.is_none());
         prop_assert!(matches!(st.head, Head::Sleepy | Head::Normal), "head {:?}", st.head);
         // sleepy 를 깨우면 normal
-        pet.on_input(typing_pet::input::Input::MouseMove, limit);
+        pet.on_input(typing_pet::input::Input::MOVE, limit);
         prop_assert_eq!(pet.state(limit).head, Head::Normal);
         // 연출도 끝난다
         anim.update(pet.state(limit), &[], limit);

@@ -26,7 +26,6 @@ pub enum PawR {
     #[default]
     Up,
     Down,
-    Center,
     Mouse,
     MouseClick,
 }
@@ -95,7 +94,6 @@ impl PawR {
         match self {
             PawR::Up => "paw_r/up",
             PawR::Down => "paw_r/down",
-            PawR::Center => "paw_r/center",
             PawR::Mouse => "paw_r/mouse",
             PawR::MouseClick => "paw_r/mouse_click",
         }
@@ -315,8 +313,8 @@ pub enum PetEvent {
     PressL,
     /// 오른발이 키/패드를 누름 (자세 포함).
     PressR(PawR),
-    /// 마우스를 움직임 (쓰로틀 후). 손을 슥슥 움직이는 연출에 쓴다.
-    MouseMove,
+    /// 마우스를 움직임 (쓰로틀 후, 커서 이동량 pt). 손이 커서 방향으로 따라가는 연출에 쓴다. 0, 0 이면 방향 없음.
+    MouseMove { dx: i32, dy: i32 },
     /// 캐릭터 행동을 부를 수 있는 일 (wake, burst, key, ambient). 단계/장면 cue 는 연출 쪽이 상태 변화로 안다.
     Cue(Cue),
 }
@@ -459,13 +457,13 @@ impl Pet {
                         self.l_until = Some(until);
                         self.events.push(PetEvent::PressL);
                     }
-                    Zone::Center => self.press_r(PawR::Center, until),
-                    Zone::Right => self.press_r(PawR::Down, until),
+                    // 가운데 키(6 7 Y U H J N M Space)는 오른손 쪽이라 오른발 down. 가운데로 뻗는 팔은 어떻게 그려도 길어 보인다
+                    Zone::Center | Zone::Right => self.press_r(PawR::Down, until),
                 }
             }
-            Input::MouseMove => {
+            Input::MouseMove { dx, dy } => {
                 self.mouse_until = Some(now + ms(self.t.mouse_hold_ms));
-                self.events.push(PetEvent::MouseMove);
+                self.events.push(PetEvent::MouseMove { dx, dy });
             }
             Input::MouseClick => {
                 self.mouse_until = Some(now + ms(self.t.click_ms + self.t.mouse_hold_ms));
