@@ -278,7 +278,11 @@
     "glow_ms": 200
   },
   "_desk": {
-    "item": "pouch"
+    "item": "pouch",
+    "hide": {
+      "full/rakko_parfait_a": ["left_back", "left_front"],
+      "full/rakko_parfait_b": ["left_back", "left_front"]
+    }
   },
   "paw_r/mouse": "mouse_short_2",
   "paw_r/mouse_click": "mouse_click_short_2",

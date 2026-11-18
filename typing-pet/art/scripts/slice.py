@@ -505,6 +505,9 @@ def main() -> None:
                 hide[f] = left
             else:
                 hide.pop(f, None)
+    # "_desk": {"hide": {"full/x": ["slot"]}}: 장면 그림의 소품(파르페 잔 등)이 놓이는 자리의 책상 소품을 그 프레임 동안 숨긴다
+    for f, slots in picks.get("_desk", {}).get("hide", {}).items():
+        hide[f] = sorted(set(hide.get(f, [])) | set(slots))
     names += ["mask/head", "mask/paw_l", "mask/paw_r", "mask/body", "mask/paw_l_top", "mask/paw_l_low", "mask/paw_r_top", "mask/paw_r_low"]
 
     order = ["base", "head/", "paw_l/", "paw_r/", "fx/", "full/", "mask/"]

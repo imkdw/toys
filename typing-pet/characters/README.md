@@ -78,9 +78,9 @@ picks.json 에 `"_expressions": {...}` 로 적으면 slice.py 가 넣는다. 근
 
 | 자리 | foot | 누가 채우나 |
 |---|---|---|
-| `left_back` (키보드 왼쪽 뒤) | [162, 784] | 직군 |
-| `left_front` (키보드 왼쪽 앞) | [212, 896] | 직군 |
-| `right_back` (마우스 오른쪽) | [858, 786] | 캐릭터 소품 (`[desk] item`) |
+| `left_back` (키보드 왼쪽 뒤) | [182, 796] | 직군 |
+| `left_front` (키보드 왼쪽 앞) | [216, 898] | 직군 |
+| `right_back` (마우스 패드 오른쪽, 책상 면 위) | [872, 826] | 캐릭터 소품 (`[desk] item`) |
 
 메뉴바 **직군 (책상 장비)** 에서 고르면 바로 바뀌고 설정(`job`)에 저장된다. 처음엔 `기본`.
 
@@ -110,10 +110,13 @@ item = "pudding"            # props.toml 의 id
 
 새 소품/직군 추가:
 
-1. `art/_props/prompts/<번호>_prop_<이름>.txt` 에 물건 설명과 자리 문장을 쓰고
-   `art/scripts/gen.sh -c _props -i art/_desk/desk_empty.png -n 2 <파일>` (빈 책상에 그 물건만 그려 넣은 그림).
-2. `art/_props/props.json` 의 `props` 에 `{"title", "slot", "src": "<고른 후보>", "tap": [...]}`, 직군은 `jobs` 에.
-3. `cd art/scripts && ../.venv/bin/python make_props.py` (빈 책상과 달라진 덩어리를 잘라 자리 크기에 맞춰 놓는다).
+1. `art/_props/sprites.json` 의 `props` 에 `"<id>": "<물건 설명>"` 을 쓰고
+   `art/scripts/gen_props.sh -n 2 <id>` (마젠타 배경에 그 물건 하나만 크게 그린 그림, `art/_props/sprite/<id>_<n>.png`).
+2. `art/_props/props.json` 의 `props` 에 `{"title", "slot", "sprite": "<고른 후보>", "tap": [...]}`, 직군은 `jobs` 에.
+   자리보다 작게/크게 놓으려면 소품에 `"max": [가로, 세로]` 를 적는다.
+3. `cd art/scripts && ../.venv/bin/python make_props.py` (배경색을 빼고 자리 크기로 줄여 놓는다. 잘리면 경고를 낸다).
+
+책상에 그려 넣은 그림에서 차이를 잘라 내던 예전 방식(`"src"`, `"from"`)도 남아 있지만 윤곽이 지저분해서 새 소품에는 쓰지 않는다.
 
 예전처럼 소품까지 그려 넣은 캐릭터는 picks.json 에 `"desk_empty": "<그 캐릭터의 소품만 지운 책상 후보>"` 를 적으면
 slice.py 가 모든 레이어에서 소품 자리(`art/_desk/item_mask.png`)를 빈 책상으로 바꾼다.

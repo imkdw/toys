@@ -7,7 +7,9 @@
 !/characters/_test/
 /art/*/ref/
 /art/*/raw/
+/art/*/sprite/
 /art/*/prompts/
+/art/_props/sprites.json
 /art/*/masks/
 /art/_desk/
 /art/_app/
