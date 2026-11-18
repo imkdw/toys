@@ -1,0 +1,5 @@
+Draw a background only: a wide pale sky-blue sky with a few round fluffy white clouds, and at the bottom a low gentle light-green grassy hill with a few tiny white and yellow flowers. The middle of the picture is empty sky.
+Style: flat 2D illustration in the exact style of the Chiikawa TV anime backgrounds: thin dark brown hand-drawn slightly wobbly outlines, soft flat pale pastel colors, no gradients, no shading, no texture, very simple shapes, lots of calm empty space. style.png is attached only as a reference for line weight and palette; do NOT draw any character, desk, keyboard or any object from it.
+No characters, no animals, no text, no letters, no watermark.
+Generate exactly one landscape 16:9 image with your image generation tool (as wide as the tool allows, e.g. 1536x1024 is fine and will be cropped to 16:9, so keep important things away from the top and bottom edges).
+Then save the generated image as ./out.png in the current directory. Do not create any other files.
