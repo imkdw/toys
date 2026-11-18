@@ -10,6 +10,8 @@
 /art/*/prompts/
 /art/*/masks/
 /art/_desk/
+/art/_app/
 /art/.venv/
 __pycache__/
 /art/*/work/
+/art/*/voice/

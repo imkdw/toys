@@ -3,8 +3,8 @@
 #
 #   scripts/installer.sh    -> target/dist/TypingPet-<버전>.dmg
 #
-# DMG 안: TypingPet.app (universal 바이너리, 캐릭터 이미지 전부 Resources 에 포함), 설치.command, 읽어주세요.txt
-# 받는 맥에서는 설치.command 를 실행하면 /Applications 에 복사하고 격리 속성을 지운 뒤 실행한다.
+# DMG 안: TypingPet.app (universal 바이너리, 캐릭터 이미지 전부 Resources 에 포함), 응용 프로그램 바로가기 둘만 둔다.
+# 창을 열면 캐릭터 배경 위에서 앱을 응용 프로그램으로 끌어 놓으면 된다.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -39,39 +39,29 @@ rm -rf "$STAGE" "$DMG"
 mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 
-cat >"$STAGE/설치.command" <<'EOF'
-#!/bin/bash
-# TypingPet 설치: /Applications 에 복사하고, 다른 맥에서 받은 앱이라 붙는 격리 속성을 지운 뒤 실행한다.
-set -e
-HERE="$(cd "$(dirname "$0")" && pwd)"
-DEST="/Applications"
-[[ -w "$DEST" ]] || DEST="$HOME/Applications"
-mkdir -p "$DEST"
-pkill -x typing-pet 2>/dev/null || true
-rm -rf "$DEST/TypingPet.app"
-cp -R "$HERE/TypingPet.app" "$DEST/"
-xattr -dr com.apple.quarantine "$DEST/TypingPet.app" 2>/dev/null || true
-echo "설치 완료: $DEST/TypingPet.app"
-echo
-echo "처음 실행하면 '입력 모니터링' 권한을 물어본다."
-echo "시스템 설정 > 개인정보 보호 및 보안 > 입력 모니터링 에서 TypingPet 을 켠 뒤 앱을 다시 실행하면 된다."
-open "$DEST/TypingPet.app"
-EOF
-chmod +x "$STAGE/설치.command"
 
-cat >"$STAGE/읽어주세요.txt" <<'EOF'
-TypingPet 설치
-
-1. 설치.command 를 더블클릭한다.
-   "확인되지 않은 개발자" 경고가 나오면: 설치.command 를 우클릭 > 열기 > 열기.
-   그래도 막히면 터미널에서:  bash "/Volumes/TypingPet/설치.command"
-2. 시스템 설정 > 개인정보 보호 및 보안 > 입력 모니터링 에서 TypingPet 을 켠다.
-3. TypingPet 을 다시 실행한다 (응용 프로그램 폴더). 메뉴바 아이콘에서 캐릭터를 고를 수 있다.
-
-지우기: 응용 프로그램 폴더에서 TypingPet.app 을 휴지통으로.
-EOF
-
-hdiutil create -volname TypingPet -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+# 설치 창: 캐릭터 배경 위에 앱 -> 응용 프로그램 으로 끌어 놓게 꾸민다 (art/_app/final/dmg_bg.png, 없으면 기본 창)
+PY="art/.venv/bin/python"
+BG_SRC="art/_app/final/dmg_bg.png"
+if [[ -f "$BG_SRC" ]] && "$PY" -c "import dmgbuild" 2>/dev/null; then
+  "$PY" - "$BG_SRC" "$DIST/bg.png" "$DIST/bg@2x.png" <<'PY'
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1]).convert("RGB").resize((1536, 1024), Image.LANCZOS)
+im.save(sys.argv[3])
+im.resize((768, 512), Image.LANCZOS).save(sys.argv[2])
+PY
+  tiffutil -cathidpicheck "$DIST/bg.png" "$DIST/bg@2x.png" -out "$DIST/bg.tiff" >/dev/null
+  "$PY" -m dmgbuild -s scripts/dmg_settings.py \
+    -D app="$STAGE/TypingPet.app" \
+    -D bg="$DIST/bg.tiff" -D icon="$STAGE/TypingPet.app/Contents/Resources/AppIcon.icns" \
+    TypingPet "$DMG" >/dev/null
+  rm -f "$DIST/bg.png" "$DIST/bg@2x.png" "$DIST/bg.tiff"
+else
+  echo "경고: $BG_SRC 나 dmgbuild 가 없어 꾸미지 않은 DMG 를 만든다 (uv pip install --python $PY dmgbuild)" >&2
+  ln -s /Applications "$STAGE/Applications"
+  hdiutil create -volname TypingPet -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+fi
 rm -rf "$STAGE"
 du -h "$DMG"
 echo "$DMG"

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""앱 아이콘 만들기: 우사기 레이어(신난 얼굴 + 키보드 치는 손)를 macOS 둥근 사각형 위에 올린다.
+"""앱 아이콘 만들기: art/_app/final/icon.png (codex 로 만든 우사기/치이카와/하치와레 타이핑 그림)를 macOS 둥근 사각형에 넣는다.
+그 그림이 없으면 우사기 레이어(신난 얼굴 + 키보드 치는 손)를 하늘색 배경 위에 올린다.
 
     python3 scripts/make_icon.py    -> target/icon/AppIcon.png (1024), target/icon/AppIcon.icns
 
@@ -14,6 +15,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
 LAYERS = ROOT / "characters/usagi/layers"
+ART = ROOT / "art/_app/final/icon.png"
 OUT = ROOT / "target/icon"
 N = 1024
 # Apple 아이콘 격자: 1024 캔버스 안에 824 둥근 사각형, 위아래 여백은 그림자 자리
@@ -59,13 +61,16 @@ def character() -> Image.Image:
 
 def main() -> None:
     mask = squircle(BOX)
-    tile = gradient(BOX, (206, 232, 255), (168, 206, 246))
-
-    ch = character()
-    h = int(BOX * 0.86)
-    w = round(ch.width * h / ch.height)
-    ch = ch.resize((w, h), Image.LANCZOS)
-    tile.alpha_composite(ch, ((BOX - w) // 2, BOX - h - int(BOX * 0.035)))
+    if ART.exists():
+        # 생성 그림은 배경까지 꽉 찬 정사각형이라 그대로 줄여서 둥근 사각형으로 자른다
+        tile = Image.open(ART).convert("RGBA").resize((BOX, BOX), Image.LANCZOS)
+    else:
+        tile = gradient(BOX, (206, 232, 255), (168, 206, 246))
+        ch = character()
+        h = int(BOX * 0.86)
+        w = round(ch.width * h / ch.height)
+        ch = ch.resize((w, h), Image.LANCZOS)
+        tile.alpha_composite(ch, ((BOX - w) // 2, BOX - h - int(BOX * 0.035)))
     tile.putalpha(ImageChops.multiply(tile.getchannel("A"), mask))
 
     icon = Image.new("RGBA", (N, N), (0, 0, 0, 0))
