@@ -1,0 +1,6 @@
+# 진행 기록, 신청 결과, 캡처 등 개인 기록은 전부 local/ 에 둔다
+local/
+.venv/
+__pycache__/
+.DS_Store
+.env
